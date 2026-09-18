@@ -1,10 +1,11 @@
 import type { Match, Sport } from './types'
 
+const BEIJING_TIME_ZONE = 'Asia/Shanghai'
+
 const when = (offset: number, hour: number, minute = 0) => {
-  const value = new Date()
-  value.setDate(value.getDate() + offset)
-  value.setHours(hour, minute, 0, 0)
-  return value.toISOString()
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: BEIJING_TIME_ZONE, year: 'numeric', month: 'numeric', day: 'numeric' }).formatToParts(new Date())
+  const value = Object.fromEntries(parts.filter((part) => part.type !== 'literal').map((part) => [part.type, Number(part.value)])) as Record<string, number>
+  return new Date(Date.UTC(value.year, value.month - 1, value.day + offset, hour - 8, minute)).toISOString()
 }
 const team = (id: string, name: string, shortName: string, players: string[] = []) => ({ id, name, shortName, players })
 

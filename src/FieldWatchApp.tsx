@@ -18,14 +18,20 @@ type HealthSnapshot = { status: StreamHealth; lastCheckedAt: string; latency: nu
 const statusLabels: Record<MatchStatus, string> = { live: '进行中', upcoming: '即将开始', finished: '已结束' }
 const healthLabels: Record<StreamHealth, string> = { online: '在线', offline: '失效', timeout: '超时', unknown: '待检测' }
 const sportOrder: Array<Sport | 'all'> = ['all', 'football', 'basketball', 'tennis', 'esports']
+const BEIJING_TIME_ZONE = 'Asia/Shanghai'
+
+function beijingDateParts(value: Date) {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: BEIJING_TIME_ZONE, year: 'numeric', month: 'numeric', day: 'numeric' }).formatToParts(value)
+  return Object.fromEntries(parts.filter((part) => part.type !== 'literal').map((part) => [part.type, Number(part.value)])) as Record<string, number>
+}
 
 function dateKey(value: Date | string) {
-  const date = typeof value === 'string' ? new Date(value) : value
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+  const date = beijingDateParts(typeof value === 'string' ? new Date(value) : value)
+  return `${date.year}-${String(date.month).padStart(2, '0')}-${String(date.day).padStart(2, '0')}`
 }
-function addDays(offset: number) { const date = new Date(); date.setDate(date.getDate() + offset); return date }
-function formatTime(value: string) { return new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value)) }
-function formatDate(value: string) { return new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'short' }).format(new Date(value)) }
+function addDays(offset: number) { const date = beijingDateParts(new Date()); return new Date(Date.UTC(date.year, date.month - 1, date.day + offset, 12)) }
+function formatTime(value: string) { return new Intl.DateTimeFormat('zh-CN', { timeZone: BEIJING_TIME_ZONE, hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value)) }
+function formatDate(value: string) { return new Intl.DateTimeFormat('zh-CN', { timeZone: BEIJING_TIME_ZONE, month: 'long', day: 'numeric', weekday: 'short' }).format(new Date(value)) }
 function matchSearchText(match: Match) { return [match.homeTeam.name, match.awayTeam.name, match.league, match.description ?? '', ...(match.homeTeam.players ?? []), ...(match.awayTeam.players ?? [])].join(' ').toLocaleLowerCase() }
 
 export default function FieldWatchApp() {
@@ -82,7 +88,7 @@ type HomeProps = { view: View; sport: Sport | 'all'; league: string; query: stri
 function Home(props: HomeProps) {
   const heading = props.view === 'favorites' ? '我的收藏' : props.view === 'recent' ? '最近观看' : '今日赛程'
   const dayItems: Array<[DayMode, string, number]> = [['today', '今天', 0], ['tomorrow', '明天', 1], ['day-after', '后天', 2]]
-  return <><section className="fw-hero"><div><p className="fw-eyebrow"><i />LIVE SPORTS HUB</p><h1>你关注的比赛，<em>都在这里。</em></h1><p className="fw-hero-copy">清爽、专注、无干扰。赛事数据与直播源分层管理。</p></div><div className="fw-date"><span>北京时间</span><b>{formatDate(new Date().toISOString())}</b><small>实时赛程视图</small></div></section><section className="fw-sports" aria-label="体育项目筛选">{sportOrder.map((item) => <button key={item} className={props.sport === item ? 'fw-sport active' : 'fw-sport'} onClick={() => props.onSport(item)}><span>{sportIcons[item]}</span>{sportLabels[item]}</button>)}</section><section className="fw-schedule"><div className="fw-heading"><div><p className="fw-eyebrow muted">SCHEDULE</p><h2>{heading}</h2><p className="fw-data-status">{props.loading ? '正在加载赛事数据…' : props.error ? `数据刷新失败：${props.error}` : props.lastUpdated ? `最后更新 ${new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit' }).format(props.lastUpdated)}` : 'Demo 赛事数据'}</p></div><div className="fw-heading-actions"><span>{props.list.length} 场比赛</span><select value={props.league} onChange={(event) => props.onLeague(event.target.value)} aria-label="赛事筛选"><option value="all">全部赛事</option>{props.leagues.map((item) => <option key={item} value={item}>{item}</option>)}</select><button className="fw-refresh" onClick={props.onRefresh} disabled={props.loading} aria-label="刷新赛事数据">{props.loading ? '…' : '刷新'}</button></div></div><div className="fw-days" aria-label="日期筛选">{dayItems.map(([mode, label, offset]) => <button key={mode} className={props.dayMode === mode ? 'selected' : ''} onClick={() => props.onDay(mode)}><small>{label}</small><b>{addDays(offset).getDate()}</b></button>)}<label className={props.dayMode === 'custom' ? 'fw-custom-date selected' : 'fw-custom-date'}><small>自定义</small><input type="date" value={props.customDate} onChange={(event) => props.onCustomDate(event.target.value)} aria-label="自定义日期" /></label></div>{props.query && <p className="fw-filter-summary">“{props.query}” 的搜索结果</p>}{props.view === 'home' && props.recentMatches.length > 0 && <section className="fw-recent"><div className="fw-group-title"><h3>最近观看</h3><span>自动保留最近 10 场</span></div><div className="fw-recent-list">{props.recentMatches.slice(0, 4).map((match) => <button key={match.id} onClick={() => props.onOpen(match)}>{match.homeTeam.name}<i>vs</i>{match.awayTeam.name}</button>)}</div></section>}{props.loading && !props.list.length ? <div className="fw-empty"><strong>正在加载赛事数据</strong><span>请稍候，正在读取缓存或 Demo 数据。</span></div> : props.list.length ? <div className="fw-groups"><MatchGroup title="正在进行" status="live" list={props.list} favorite={props.isFavorite} onToggleFavorite={props.onToggleFavorite} onOpen={props.onOpen} /><MatchGroup title="即将开始" status="upcoming" list={props.list} favorite={props.isFavorite} onToggleFavorite={props.onToggleFavorite} onOpen={props.onOpen} /><MatchGroup title="已结束" status="finished" list={props.list} favorite={props.isFavorite} onToggleFavorite={props.onToggleFavorite} onOpen={props.onOpen} /></div> : <EmptyState view={props.view} />}</section></>
+  return <><section className="fw-hero"><div><p className="fw-eyebrow"><i />LIVE SPORTS HUB</p><h1>你关注的比赛，<em>都在这里。</em></h1><p className="fw-hero-copy">清爽、专注、无干扰。赛事数据与直播源分层管理。</p></div><div className="fw-date"><span>北京时间</span><b>{formatDate(new Date().toISOString())}</b><small>实时赛程视图</small></div></section><section className="fw-sports" aria-label="体育项目筛选">{sportOrder.map((item) => <button key={item} className={props.sport === item ? 'fw-sport active' : 'fw-sport'} onClick={() => props.onSport(item)}><span>{sportIcons[item]}</span>{sportLabels[item]}</button>)}</section><section className="fw-schedule"><div className="fw-heading"><div><p className="fw-eyebrow muted">SCHEDULE</p><h2>{heading}</h2><p className="fw-data-status">{props.loading ? '正在加载赛事数据…' : props.error ? `数据刷新失败：${props.error}` : props.lastUpdated ? `最后更新 ${new Intl.DateTimeFormat('zh-CN', { timeZone: BEIJING_TIME_ZONE, hour: '2-digit', minute: '2-digit' }).format(props.lastUpdated)}` : 'Demo 赛事数据'}</p></div><div className="fw-heading-actions"><span>{props.list.length} 场比赛</span><select value={props.league} onChange={(event) => props.onLeague(event.target.value)} aria-label="赛事筛选"><option value="all">全部赛事</option>{props.leagues.map((item) => <option key={item} value={item}>{item}</option>)}</select><button className="fw-refresh" onClick={props.onRefresh} disabled={props.loading} aria-label="刷新赛事数据">{props.loading ? '…' : '刷新'}</button></div></div><div className="fw-days" aria-label="日期筛选">{dayItems.map(([mode, label, offset]) => <button key={mode} className={props.dayMode === mode ? 'selected' : ''} onClick={() => props.onDay(mode)}><small>{label}</small><b>{beijingDateParts(addDays(offset)).day}</b></button>)}<label className={props.dayMode === 'custom' ? 'fw-custom-date selected' : 'fw-custom-date'}><small>自定义</small><input type="date" value={props.customDate} onChange={(event) => props.onCustomDate(event.target.value)} aria-label="自定义日期" /></label></div>{props.query && <p className="fw-filter-summary">“{props.query}” 的搜索结果</p>}{props.view === 'home' && props.recentMatches.length > 0 && <section className="fw-recent"><div className="fw-group-title"><h3>最近观看</h3><span>自动保留最近 10 场</span></div><div className="fw-recent-list">{props.recentMatches.slice(0, 4).map((match) => <button key={match.id} onClick={() => props.onOpen(match)}>{match.homeTeam.name}<i>vs</i>{match.awayTeam.name}</button>)}</div></section>}{props.loading && !props.list.length ? <div className="fw-empty"><strong>正在加载赛事数据</strong><span>请稍候，正在读取缓存或 Demo 数据。</span></div> : props.list.length ? <div className="fw-groups"><MatchGroup title="正在进行" status="live" list={props.list} favorite={props.isFavorite} onToggleFavorite={props.onToggleFavorite} onOpen={props.onOpen} /><MatchGroup title="即将开始" status="upcoming" list={props.list} favorite={props.isFavorite} onToggleFavorite={props.onToggleFavorite} onOpen={props.onOpen} /><MatchGroup title="已结束" status="finished" list={props.list} favorite={props.isFavorite} onToggleFavorite={props.onToggleFavorite} onOpen={props.onOpen} /></div> : <EmptyState view={props.view} />}</section></>
 }
 function EmptyState({ view }: { view: View }) { const message = view === 'favorites' ? '还没有收藏的比赛' : view === 'recent' ? '还没有观看记录' : '这个筛选条件下没有比赛'; const detail = view === 'favorites' ? '在比赛卡片或观看页点击星标即可收藏。' : view === 'recent' ? '打开任意比赛观看页后，会自动保存在这里。' : '试试切换日期、项目、赛事，或调整搜索词。'; return <div className="fw-empty"><strong>{message}</strong><span>{detail}</span></div> }
 function MatchGroup({ title, status, list, favorite, onToggleFavorite, onOpen }: { title: string; status: MatchStatus; list: Match[]; favorite: (id: string) => boolean; onToggleFavorite: (id: string) => void; onOpen: (match: Match) => void }) { const group = list.filter((match) => match.status === status); if (!group.length) return null; return <section className="fw-match-group"><div className="fw-group-title"><h3>{title}</h3><span>{group.length} 场</span></div><div className="fw-list">{group.map((match) => <MatchCard key={match.id} match={match} favorite={favorite(match.id)} onToggleFavorite={onToggleFavorite} onOpen={onOpen} />)}</div></section> }
@@ -92,6 +98,7 @@ type WatchProps = { match: Match; sources: Stream[]; streamsLoading: boolean; st
 function Watch(props: WatchProps) {
   const playerRef = useRef<HTMLDivElement>(null)
   const failedIdsRef = useRef<Set<string>>(new Set())
+  const healthRequestRef = useRef(0)
   const [failedState, setFailedState] = useState<{ matchId: string; ids: Set<string> }>(() => ({ matchId: props.match.id, ids: new Set() }))
   const failedIds = failedState.matchId === props.match.id ? failedState.ids : new Set<string>()
   const source = props.sources.find((item) => item.id === props.sourceId) ?? props.sources[0]
@@ -99,10 +106,24 @@ function Watch(props: WatchProps) {
   const accent = props.match.sport === 'basketball' ? '#ff8a4c' : props.match.sport === 'tennis' ? '#bfef63' : '#8b7bff'
   const style = { '--fw-accent': accent } as CSSProperties
   useEffect(() => { failedIdsRef.current = new Set() }, [props.match.id])
+  useEffect(() => {
+    healthRequestRef.current += 1
+    return () => { healthRequestRef.current += 1 }
+  }, [props.match.id, source?.id, source?.url])
   const reportHealth = (stream: Stream, next: HealthSnapshot) => { props.onHealth(stream.id, next); if (next.status === 'offline' || next.status === 'timeout') { failedIdsRef.current.add(stream.id); setFailedState((current) => { const ids = current.matchId === props.match.id ? new Set(current.ids) : new Set<string>(); ids.add(stream.id); return { matchId: props.match.id, ids } }) } }
   const failover = (failedSource: Stream) => { failedIdsRef.current.add(failedSource.id); const next = getNextSource(props.sources, failedIdsRef.current); if (next) { props.onSelectSource(next.id); props.setMessage(`“${failedSource.name}”播放失败，已自动切换到“${next.name}”。`) } else props.setMessage('所有直播源暂时不可用') }
   const onMediaError = (event: SyntheticEvent<HTMLVideoElement | HTMLIFrameElement>) => { if (!source) return; reportHealth(source, { status: 'offline', lastCheckedAt: new Date().toISOString(), latency: null, errorMessage: '播放器加载失败' }); failover(source); event.currentTarget.removeAttribute('src') }
-  const refresh = () => { if (!source) return; void checkStreamHealth(source).then((result) => { const snapshot = { status: result.status, lastCheckedAt: result.lastCheckedAt, latency: result.latency, errorMessage: result.errorMessage }; reportHealth(source, snapshot); props.setMessage(result.errorMessage ?? `健康状态：${healthLabels[result.status]}`) }) }
+  const refresh = () => {
+    if (!source) return
+    const requestId = healthRequestRef.current
+    const requestSource = source
+    void checkStreamHealth(requestSource).then((result) => {
+      if (requestId !== healthRequestRef.current) return
+      const snapshot = { status: result.status, lastCheckedAt: result.lastCheckedAt, latency: result.latency, errorMessage: result.errorMessage }
+      reportHealth(requestSource, snapshot)
+      props.setMessage(result.errorMessage ?? `健康状态：${healthLabels[result.status]}`)
+    })
+  }
   const fullscreen = () => { const target = playerRef.current; if (!target?.requestFullscreen) { props.setMessage('当前浏览器不支持全屏播放器。'); return } void target.requestFullscreen().catch(() => props.setMessage('无法进入全屏模式。')) }
   const playerError = !source ? '这场比赛暂无直播源配置。' : getStreamUrlError(source) ?? (status === 'offline' || status === 'timeout' ? '当前直播源不可用，请切换备用源。' : null)
   const retrySources = () => { failedIdsRef.current = new Set(); setFailedState({ matchId: props.match.id, ids: new Set() }); props.setMessage(null); props.onRefreshSources() }
@@ -111,11 +132,11 @@ function Watch(props: WatchProps) {
 function MediaElement({ source, onError }: { source: Stream; onError: (event: SyntheticEvent<HTMLVideoElement | HTMLIFrameElement>) => void }) { if (source.type === 'embed') return <EmbedElement source={source} onError={onError} />; return <VideoElement source={source} onError={onError} /> }
 function VideoElement({ source, onError }: { source: Stream; onError: (event: SyntheticEvent<HTMLVideoElement>) => void }) {
   const mediaRef = useRef<HTMLVideoElement>(null)
-  useEffect(() => () => { const media = mediaRef.current; if (media) { media.pause(); media.removeAttribute('src'); media.load() } }, [source.id])
+  useEffect(() => () => { const media = mediaRef.current; if (media) { media.pause(); media.removeAttribute('src'); media.load() } }, [source.id, source.url])
   return <video ref={mediaRef} className="fw-media" src={source.url} controls autoPlay playsInline onError={onError} />
 }
 function EmbedElement({ source, onError }: { source: Stream; onError: (event: SyntheticEvent<HTMLIFrameElement>) => void }) {
   const frameRef = useRef<HTMLIFrameElement>(null)
-  useEffect(() => () => { frameRef.current?.removeAttribute('src') }, [source.id])
+  useEffect(() => () => { frameRef.current?.removeAttribute('src') }, [source.id, source.url])
   return <iframe ref={frameRef} className="fw-media" src={source.url} title={source.name} sandbox="allow-same-origin allow-presentation" allow="fullscreen" referrerPolicy="no-referrer" loading="lazy" onError={onError} />
 }
