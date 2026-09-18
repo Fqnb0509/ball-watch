@@ -10,6 +10,7 @@ export const checkStreamHealth = async (stream: Stream, timeoutMs = DEFAULT_TIME
   const startedAt = Date.now()
   const policyError = getStreamUrlError(stream)
   if (policyError) return { ...unknownResult(stream, policyError, startedAt), status: stream.enabled ? 'unknown' : 'offline' }
+  if (stream.access === 'official-page') return unknownResult(stream, '官方观看入口状态需由官方页面确认', startedAt)
   if (stream.type === 'embed') return unknownResult(stream, '嵌入源状态需由播放器确认', startedAt)
 
   const controller = new AbortController()

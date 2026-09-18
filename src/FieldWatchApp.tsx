@@ -6,8 +6,8 @@ import { useStreams } from './hooks/use-streams'
 import { getFavorites, getRecentWatches, recordRecentWatch, toggleFavorite } from './storage'
 import type { FavoriteState, RecentWatch } from './storage'
 import { checkStreamHealth } from './services/stream-health-service'
-import { getNextSource } from './services/stream-service'
-import { getStreamUrlError } from './services/stream-url-policy'
+import { getNextSource, getPlayableSources, hasLegalSourceForMatch } from './services/stream-service'
+import { getSafeOfficialPageUrl, getStreamUrlError } from './services/stream-url-policy'
 import type { Match, MatchStatus, Sport, Stream, StreamHealth } from './types'
 import './fieldwatch.css'
 
@@ -72,7 +72,7 @@ export default function FieldWatchApp() {
     return () => { active = false }
   }, [selectedId, streams])
 
-  const openMatch = (match: Match) => { setPlayerMessage(null); setRecent(recordRecentWatch(match.id)); setSelectedId(match.id); window.scrollTo({ top: 0, behavior: 'smooth' }) }
+  const openMatch = (match: Match) => { setPlayerMessage(null); setSourceId(null); setSourceHealth({}); setRecent(recordRecentWatch(match.id)); setSelectedId(match.id); window.scrollTo({ top: 0, behavior: 'smooth' }) }
   const toggle = (kind: keyof FavoriteState, id: string) => setFavorites(toggleFavorite(kind, id))
   const isFavorite = (kind: keyof FavoriteState, id: string) => favorites[kind].includes(id)
   const switchView = (next: View) => { setSelectedId(null); setView(next) }
@@ -80,7 +80,7 @@ export default function FieldWatchApp() {
   return <div className="fw-shell">
     <header className="fw-topbar"><div className="fw-topbar-inner"><button className="fw-brand" onClick={() => switchView('home')} aria-label="返回赛事中心"><span className="fw-brand-mark"><i /></span><span><b>FIELD</b><small>WATCH</small></span></button><nav aria-label="主导航"><button className={view === 'home' && !selected ? 'fw-nav active' : 'fw-nav'} onClick={() => switchView('home')}>赛事中心</button><button className={view === 'favorites' ? 'fw-nav active' : 'fw-nav'} onClick={() => switchView('favorites')}>我的收藏</button><button className={view === 'recent' ? 'fw-nav active' : 'fw-nav'} onClick={() => switchView('recent')}>最近观看</button></nav><div className="fw-actions"><label className="fw-search"><span>⌕</span><input value={query} onChange={(event) => { setQuery(event.target.value); if (!selected) setView('home') }} placeholder="搜索球队、球员或赛事" aria-label="搜索比赛" /><kbd>⌘ K</kbd></label><button className="fw-counter" onClick={() => switchView('favorites')} title="我的收藏">★<small>{favorites.matches.length}</small></button><button className="fw-counter" onClick={() => switchView('recent')} title="最近观看">◷<small>{recent.length}</small></button></div></div></header>
     <main className={selected ? 'fw-main fw-watch-mode' : 'fw-main'}>{selected ? <Watch match={selected} sources={streams} streamsLoading={streamsLoading} streamsError={streamsError} sourceId={sourceId} sourceHealth={sourceHealth} favorite={isFavorite('matches', selected.id)} onFavorite={() => toggle('matches', selected.id)} onTeamFavorite={(id) => toggle('teams', id)} onLeagueFavorite={() => toggle('leagues', selected.league)} isTeamFavorite={(id) => isFavorite('teams', id)} isLeagueFavorite={isFavorite('leagues', selected.league)} onSelectSource={setSourceId} onHealth={(id, result) => setSourceHealth((current) => ({ ...current, [id]: result }))} onRefreshSources={refreshStreams} message={playerMessage} setMessage={setPlayerMessage} back={() => setSelectedId(null)} /> : <Home view={view} sport={sport} league={league} query={query} selectedDate={selectedDate} dayMode={dayMode} customDate={customDate} leagues={leagues} list={listedMatches} recentMatches={recentMatches} isFavorite={(id) => isFavorite('matches', id)} onSport={(next) => { setSport(next); setLeague('all') }} onLeague={setLeague} onDay={setDayMode} onCustomDate={(value) => { setCustomDate(value); setDayMode('custom') }} onToggleFavorite={(id) => toggle('matches', id)} onOpen={openMatch} loading={matchesLoading} error={matchesError} lastUpdated={lastUpdated} onRefresh={refreshMatches} />}</main>
-    <footer className="fw-footer"><span>FIELDWATCH · 个人赛事空间</span><span>数据、播放器和直播源独立配置 · 无广告、无弹窗、无外部跳转</span></footer>
+    <footer className="fw-footer"><span>FIELDWATCH · 个人赛事空间</span><span>数据、播放器和直播源独立配置 · 无广告、无弹窗 · 仅提供已核验官方入口</span></footer>
   </div>
 }
 
@@ -92,7 +92,7 @@ function Home(props: HomeProps) {
 }
 function EmptyState({ view }: { view: View }) { const message = view === 'favorites' ? '还没有收藏的比赛' : view === 'recent' ? '还没有观看记录' : '这个筛选条件下没有比赛'; const detail = view === 'favorites' ? '在比赛卡片或观看页点击星标即可收藏。' : view === 'recent' ? '打开任意比赛观看页后，会自动保存在这里。' : '试试切换日期、项目、赛事，或调整搜索词。'; return <div className="fw-empty"><strong>{message}</strong><span>{detail}</span></div> }
 function MatchGroup({ title, status, list, favorite, onToggleFavorite, onOpen }: { title: string; status: MatchStatus; list: Match[]; favorite: (id: string) => boolean; onToggleFavorite: (id: string) => void; onOpen: (match: Match) => void }) { const group = list.filter((match) => match.status === status); if (!group.length) return null; return <section className="fw-match-group"><div className="fw-group-title"><h3>{title}</h3><span>{group.length} 场</span></div><div className="fw-list">{group.map((match) => <MatchCard key={match.id} match={match} favorite={favorite(match.id)} onToggleFavorite={onToggleFavorite} onOpen={onOpen} />)}</div></section> }
-function MatchCard({ match, favorite, onToggleFavorite, onOpen }: { match: Match; favorite: boolean; onToggleFavorite: (id: string) => void; onOpen: (match: Match) => void }) { const open = () => onOpen(match); return <article className={`fw-card ${match.status}`} role="button" tabIndex={0} onClick={open} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') open() }}><div className="fw-card-inner"><div className="fw-time"><b>{formatTime(match.startTime)}</b><span className={`fw-status ${match.status}`}>{match.status === 'live' && <i />}{statusLabels[match.status]}</span></div><div className="fw-teams"><div className="fw-league"><span>{sportIcons[match.sport]}</span>{match.league}<small>{match.round}</small></div><div className="fw-team-row"><b>{match.homeTeam.name}</b><span className="fw-badge home">{match.homeTeam.shortName?.slice(0, 2)}</span><span className="fw-vs">{match.score ? `${match.score[0]} : ${match.score[1]}` : 'VS'}</span><span className="fw-badge away">{match.awayTeam.shortName?.slice(0, 2)}</span><b>{match.awayTeam.name}</b></div></div><div className="fw-card-meta"><span>{match.streamIds.length ? '● 有可选直播源' : '○ 暂无直播源'}</span><small>{match.venue}</small></div><button className={favorite ? 'fw-favorite active' : 'fw-favorite'} onClick={(event) => { event.stopPropagation(); onToggleFavorite(match.id) }} title={favorite ? '取消收藏比赛' : '收藏比赛'} aria-label={favorite ? '取消收藏比赛' : '收藏比赛'}>{favorite ? '★' : '☆'}</button><button className="fw-watch-btn" onClick={(event) => { event.stopPropagation(); open() }}>{match.status === 'live' ? '立即观看' : '查看详情'} <span>→</span></button></div></article> }
+ function MatchCard({ match, favorite, onToggleFavorite, onOpen }: { match: Match; favorite: boolean; onToggleFavorite: (id: string) => void; onOpen: (match: Match) => void }) { const open = () => onOpen(match); return <article className={`fw-card ${match.status}`} role="button" tabIndex={0} onClick={open} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') open() }}><div className="fw-card-inner"><div className="fw-time"><b>{formatTime(match.startTime)}</b><span className={`fw-status ${match.status}`}>{match.status === 'live' && <i />}{statusLabels[match.status]}</span></div><div className="fw-teams"><div className="fw-league"><span>{sportIcons[match.sport]}</span>{match.league}<small>{match.round}</small></div><div className="fw-team-row"><b>{match.homeTeam.name}</b><span className="fw-badge home">{match.homeTeam.shortName?.slice(0, 2)}</span><span className="fw-vs">{match.score ? `${match.score[0]} : ${match.score[1]}` : 'VS'}</span><span className="fw-badge away">{match.awayTeam.shortName?.slice(0, 2)}</span><b>{match.awayTeam.name}</b></div></div><div className="fw-card-meta"><span>{hasLegalSourceForMatch(match) ? '● 已核验来源配置' : '○ 暂无合法直播源'}</span><small>{match.venue}</small></div><button className={favorite ? 'fw-favorite active' : 'fw-favorite'} onClick={(event) => { event.stopPropagation(); onToggleFavorite(match.id) }} title={favorite ? '取消收藏比赛' : '收藏比赛'} aria-label={favorite ? '取消收藏比赛' : '收藏比赛'}>{favorite ? '★' : '☆'}</button><button className="fw-watch-btn" onClick={(event) => { event.stopPropagation(); open() }}>{match.status === 'live' ? '立即观看' : '查看详情'} <span>→</span></button></div></article> }
 
 type WatchProps = { match: Match; sources: Stream[]; streamsLoading: boolean; streamsError: string | null; sourceId: string | null; sourceHealth: Record<string, HealthSnapshot>; favorite: boolean; onFavorite: () => void; onTeamFavorite: (id: string) => void; onLeagueFavorite: () => void; isTeamFavorite: (id: string) => boolean; isLeagueFavorite: boolean; onSelectSource: (id: string) => void; onHealth: (id: string, result: HealthSnapshot) => void; onRefreshSources: () => void; message: string | null; setMessage: (message: string | null) => void; back: () => void }
 function Watch(props: WatchProps) {
@@ -101,7 +101,12 @@ function Watch(props: WatchProps) {
   const healthRequestRef = useRef(0)
   const [failedState, setFailedState] = useState<{ matchId: string; ids: Set<string> }>(() => ({ matchId: props.match.id, ids: new Set() }))
   const failedIds = failedState.matchId === props.match.id ? failedState.ids : new Set<string>()
-  const source = props.sources.find((item) => item.id === props.sourceId) ?? props.sources[0]
+  const source = props.sources.find((item) => item.id === props.sourceId)
+    ?? getPlayableSources(props.sources)[0]
+    ?? props.sources.find((item) => item.access === 'official-page' && getSafeOfficialPageUrl(item))
+    ?? props.sources[0]
+  const playableSources = getPlayableSources(props.sources)
+  const allPlayableSourcesFailed = playableSources.length > 0 && playableSources.every((item) => failedIds.has(item.id))
   const status = source ? props.sourceHealth[source.id]?.status ?? source.status : 'unknown'
   const accent = props.match.sport === 'basketball' ? '#ff8a4c' : props.match.sport === 'tennis' ? '#bfef63' : '#8b7bff'
   const style = { '--fw-accent': accent } as CSSProperties
@@ -111,8 +116,24 @@ function Watch(props: WatchProps) {
     return () => { healthRequestRef.current += 1 }
   }, [props.match.id, source?.id, source?.url])
   const reportHealth = (stream: Stream, next: HealthSnapshot) => { props.onHealth(stream.id, next); if (next.status === 'offline' || next.status === 'timeout') { failedIdsRef.current.add(stream.id); setFailedState((current) => { const ids = current.matchId === props.match.id ? new Set(current.ids) : new Set<string>(); ids.add(stream.id); return { matchId: props.match.id, ids } }) } }
-  const failover = (failedSource: Stream) => { failedIdsRef.current.add(failedSource.id); const next = getNextSource(props.sources, failedIdsRef.current); if (next) { props.onSelectSource(next.id); props.setMessage(`“${failedSource.name}”播放失败，已自动切换到“${next.name}”。`) } else props.setMessage('所有直播源暂时不可用') }
-  const onMediaError = (event: SyntheticEvent<HTMLVideoElement | HTMLIFrameElement>) => { if (!source) return; reportHealth(source, { status: 'offline', lastCheckedAt: new Date().toISOString(), latency: null, errorMessage: '播放器加载失败' }); failover(source); event.currentTarget.removeAttribute('src') }
+  const failover = (failedSource: Stream) => {
+    failedIdsRef.current.add(failedSource.id)
+    const next = getNextSource(props.sources, failedIdsRef.current)
+    if (next) {
+      props.onSelectSource(next.id)
+      props.setMessage(`“${failedSource.name}”播放失败，已自动切换到“${next.name}”。`)
+    } else {
+      props.setMessage('直播源不可用：所有合法直播源均已失败。')
+    }
+  }
+  const onMediaError = (event: SyntheticEvent<HTMLVideoElement | HTMLIFrameElement>) => {
+    if (!source || source.access !== 'player') return
+    if (!failedIdsRef.current.has(source.id)) {
+      reportHealth(source, { status: 'offline', lastCheckedAt: new Date().toISOString(), latency: null, errorMessage: '播放器加载失败' })
+      failover(source)
+    }
+    event.currentTarget.removeAttribute('src')
+  }
   const refresh = () => {
     if (!source) return
     const requestId = healthRequestRef.current
@@ -125,18 +146,33 @@ function Watch(props: WatchProps) {
     })
   }
   const fullscreen = () => { const target = playerRef.current; if (!target?.requestFullscreen) { props.setMessage('当前浏览器不支持全屏播放器。'); return } void target.requestFullscreen().catch(() => props.setMessage('无法进入全屏模式。')) }
-  const playerError = !source ? '这场比赛暂无直播源配置。' : getStreamUrlError(source) ?? (status === 'offline' || status === 'timeout' ? '当前直播源不可用，请切换备用源。' : null)
-  const retrySources = () => { failedIdsRef.current = new Set(); setFailedState({ matchId: props.match.id, ids: new Set() }); props.setMessage(null); props.onRefreshSources() }
-  return <section className="fw-watch" style={style}><button className="fw-back" onClick={props.back}>← 返回赛事中心</button><div className="fw-watch-head"><div><p className="fw-eyebrow muted">{props.match.league} · {props.match.round}</p><h1>{props.match.homeTeam.name} <span>vs</span> {props.match.awayTeam.name}</h1><p className="fw-watch-sub"><i className={props.match.status === 'live' ? 'live' : ''} />{statusLabels[props.match.status]} · {formatDate(props.match.startTime)} {formatTime(props.match.startTime)} · {props.match.venue}</p><div className="fw-watch-favorites"><button className={props.favorite ? 'active' : ''} onClick={props.onFavorite}>{props.favorite ? '★ 已收藏比赛' : '☆ 收藏比赛'}</button><button className={props.isTeamFavorite(props.match.homeTeam.id) ? 'active' : ''} onClick={() => props.onTeamFavorite(props.match.homeTeam.id)}>收藏 {props.match.homeTeam.name}</button><button className={props.isLeagueFavorite ? 'active' : ''} onClick={props.onLeagueFavorite}>收藏 {props.match.league}</button></div></div></div><div className="fw-player-layout"><div><div className="fw-player" ref={playerRef}><div className="fw-player-label"><span>{props.match.league}</span><span>FIELDWATCH PLAYER</span></div>{source && !playerError && source.url ? <MediaElement source={source} onError={onMediaError} /> : <div className="fw-player-center"><div className="fw-play-ring">{playerError ? '!' : '▶'}</div><strong>{playerError ?? '播放器已就绪'}</strong><p>{source ? `当前源：${source.name} · ${source.type.toUpperCase()}` : '请选择一个直播源。'}</p></div>}<div className="fw-controls"><button onClick={fullscreen} title="全屏播放器">⛶</button><i><b /></i><button onClick={refresh} title="检查当前直播源">↻</button></div></div><div className={playerError ? 'fw-player-note error' : 'fw-player-note'}><span>{playerError ? '!' : '✓'}</span>{props.message ?? (playerError ?? '本站播放器不包含广告、弹窗或外部跳转。')}<button onClick={() => props.setMessage(null)}>清除提示</button></div></div><aside className="fw-source-panel"><div className="fw-panel-head"><div><p className="fw-eyebrow muted">STREAM SOURCES</p><h3>直播源</h3></div><small>{props.sources.length} 个</small></div>{props.streamsLoading ? <p className="fw-no-source">正在加载直播源…</p> : props.streamsError ? <p className="fw-no-source">{props.streamsError}</p> : <div className="fw-source-list">{props.sources.length ? props.sources.map((item) => { const itemStatus = props.sourceHealth[item.id]?.status ?? item.status; return <button key={item.id} className={item.id === source?.id ? 'selected' : ''} disabled={!item.enabled || failedIds.has(item.id)} onClick={() => { props.onSelectSource(item.id); props.setMessage(null) }}><i /><span><b>{item.name}</b><small>{item.type.toUpperCase()} · 优先级 {item.priority}{item.enabled ? '' : ' · 已禁用'}</small></span><em className={itemStatus === 'online' ? 'ready' : itemStatus === 'offline' || itemStatus === 'timeout' ? 'down' : ''}>{healthLabels[itemStatus]}</em></button> }) : <p className="fw-no-source">这场比赛暂无直播源配置。</p>}</div>}<div className="fw-tip"><i>i</i>Demo 源不会伪装成真实直播；播放失败时仅在已启用备用源中自动切换一次。</div><button className="fw-source-refresh" onClick={retrySources}>刷新直播源</button></aside></div></section>
+  const officialPageUrl = source?.access === 'official-page' ? getSafeOfficialPageUrl(source) : null
+  let playerError: string | null = null
+  if (props.streamsLoading) playerError = '正在检测直播源'
+  else if (props.streamsError) playerError = `直播源加载失败：${props.streamsError}`
+  else if (source?.access === 'official-page') playerError = officialPageUrl ? null : '暂无合法直播源'
+  else if (!source || playableSources.length === 0) playerError = '暂无合法直播源'
+  else if (allPlayableSourcesFailed) playerError = '直播源不可用：所有合法直播源均已失败。'
+  else if (source.access !== 'player') playerError = '暂无合法直播源'
+  else playerError = getStreamUrlError(source) ?? (status === 'offline' || status === 'timeout' ? '直播源不可用，请切换备用源。' : null)
+  const retrySources = () => { healthRequestRef.current += 1; failedIdsRef.current = new Set(); setFailedState({ matchId: props.match.id, ids: new Set() }); props.setMessage(null); props.onRefreshSources() }
+  const playerNote = officialPageUrl ? '该来源仅提供官方观看入口，本站不会提取或绕过受保护的直播流。' : playerError ?? '本站播放器不包含广告、弹窗或外部跳转。'
+  return <section className="fw-watch" style={style}><button className="fw-back" onClick={props.back}>← 返回赛事中心</button><div className="fw-watch-head"><div><p className="fw-eyebrow muted">{props.match.league} · {props.match.round}</p><h1>{props.match.homeTeam.name} <span>vs</span> {props.match.awayTeam.name}</h1><p className="fw-watch-sub"><i className={props.match.status === 'live' ? 'live' : ''} />{statusLabels[props.match.status]} · {formatDate(props.match.startTime)} {formatTime(props.match.startTime)} · {props.match.venue}</p><div className="fw-watch-favorites"><button className={props.favorite ? 'active' : ''} onClick={props.onFavorite}>{props.favorite ? '★ 已收藏比赛' : '☆ 收藏比赛'}</button><button className={props.isTeamFavorite(props.match.homeTeam.id) ? 'active' : ''} onClick={() => props.onTeamFavorite(props.match.homeTeam.id)}>收藏 {props.match.homeTeam.name}</button><button className={props.isLeagueFavorite ? 'active' : ''} onClick={props.onLeagueFavorite}>收藏 {props.match.league}</button></div></div></div><div className="fw-player-layout"><div><div className="fw-player" ref={playerRef}><div className="fw-player-label"><span>{props.match.league}</span><span>FIELDWATCH PLAYER</span></div>{officialPageUrl ? <div className="fw-player-center"><div className="fw-play-ring">↗</div><strong>官方观看入口</strong><p>该来源由官方页面提供，播放权限和地区可用性以官方页面为准。</p><a className="fw-official-link" href={officialPageUrl} target="_blank" rel="noopener noreferrer">打开官方观看入口</a></div> : source && source.access === 'player' && !playerError && source.url ? <MediaElement key={`${source.id}:${source.url}`} source={source} onError={onMediaError} /> : <div className="fw-player-center"><div className="fw-play-ring">{playerError ? '!' : '▶'}</div><strong>{playerError ?? '播放器已就绪'}</strong><p>{source ? `当前源：${source.name} · ${source.type.toUpperCase()}` : '请选择一个直播源。'}</p></div>}<div className="fw-controls"><button onClick={fullscreen} title="全屏播放器">⛶</button><i><b /></i><button onClick={refresh} title="检查当前直播源">↻</button></div></div><div className={playerError ? 'fw-player-note error' : 'fw-player-note'}><span>{playerError ? '!' : '✓'}</span>{props.message ?? playerNote}<button onClick={() => props.setMessage(null)}>清除提示</button></div></div><aside className="fw-source-panel"><div className="fw-panel-head"><div><p className="fw-eyebrow muted">STREAM SOURCES</p><h3>直播源</h3></div><small>{props.sources.length} 个</small></div>{props.streamsLoading ? <p className="fw-no-source">正在检测直播源…</p> : props.streamsError ? <p className="fw-no-source">{props.streamsError}</p> : <div className="fw-source-list">{props.sources.length ? props.sources.map((item) => { const itemStatus = props.sourceHealth[item.id]?.status ?? item.status; const accessLabel = item.access === 'official-page' ? '官方入口' : item.provider === 'demo' ? 'DEMO · 待授权' : item.type.toUpperCase(); return <button key={item.id} className={item.id === source?.id ? 'selected' : ''} disabled={!item.enabled || failedIds.has(item.id)} onClick={() => { props.onSelectSource(item.id); props.setMessage(null) }}><i /><span><b>{item.name}</b><small>{accessLabel} · 优先级 {item.priority}{item.enabled ? '' : ' · 已禁用'}</small></span><em className={itemStatus === 'online' ? 'ready' : itemStatus === 'offline' || itemStatus === 'timeout' ? 'down' : ''}>{item.legalStatus === 'authorized' ? healthLabels[itemStatus] : '待授权'}</em></button> }) : <p className="fw-no-source">暂无合法直播源。</p>}</div>}<div className="fw-tip"><i>i</i>仅自动尝试已授权且通过 URL 校验的备用源；Demo 源不会伪装成真实直播。</div><button className="fw-source-refresh" onClick={retrySources}>刷新直播源</button></aside></div></section>
 }
 function MediaElement({ source, onError }: { source: Stream; onError: (event: SyntheticEvent<HTMLVideoElement | HTMLIFrameElement>) => void }) { if (source.type === 'embed') return <EmbedElement source={source} onError={onError} />; return <VideoElement source={source} onError={onError} /> }
 function VideoElement({ source, onError }: { source: Stream; onError: (event: SyntheticEvent<HTMLVideoElement>) => void }) {
   const mediaRef = useRef<HTMLVideoElement>(null)
-  useEffect(() => () => { const media = mediaRef.current; if (media) { media.pause(); media.removeAttribute('src'); media.load() } }, [source.id, source.url])
+  useEffect(() => {
+    const media = mediaRef.current
+    return () => { if (media) { media.pause(); media.removeAttribute('src'); media.load() } }
+  }, [])
   return <video ref={mediaRef} className="fw-media" src={source.url} controls autoPlay playsInline onError={onError} />
 }
 function EmbedElement({ source, onError }: { source: Stream; onError: (event: SyntheticEvent<HTMLIFrameElement>) => void }) {
   const frameRef = useRef<HTMLIFrameElement>(null)
-  useEffect(() => () => { frameRef.current?.removeAttribute('src') }, [source.id, source.url])
-  return <iframe ref={frameRef} className="fw-media" src={source.url} title={source.name} sandbox="allow-same-origin allow-presentation" allow="fullscreen" referrerPolicy="no-referrer" loading="lazy" onError={onError} />
+  useEffect(() => {
+    const frame = frameRef.current
+    return () => { frame?.removeAttribute('src') }
+  }, [])
+  return <iframe ref={frameRef} className="fw-media" src={source.url} title={source.name} sandbox="allow-scripts allow-same-origin allow-presentation" allow="autoplay; fullscreen; picture-in-picture" referrerPolicy="no-referrer" loading="lazy" onError={onError} />
 }

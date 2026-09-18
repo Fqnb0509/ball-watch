@@ -1,6 +1,9 @@
 export type Sport = 'football' | 'basketball' | 'tennis' | 'esports'
 export type MatchStatus = 'upcoming' | 'live' | 'finished'
 export type StreamType = 'hls' | 'dash' | 'mp4' | 'embed'
+export type StreamProvider = 'demo' | 'official' | 'youtube' | 'external-api' | 'manual'
+export type StreamLegalStatus = 'demo' | 'authorized' | 'unverified'
+export type StreamAccess = 'player' | 'official-page'
 export type StreamHealth = 'online' | 'offline' | 'timeout' | 'unknown'
 export type Team = { id: string; name: string; shortName?: string; players?: string[] }
 export type Match = {
@@ -18,6 +21,7 @@ export type Match = {
   venue?: string
   score?: [number, number]
   streamIds: string[]
+  providerEventId?: string
 }
 export type Stream = {
   id: string
@@ -32,4 +36,9 @@ export type Stream = {
   errorMessage: string | null
   latency: number | null
   fallbackEnabled: boolean
+  provider: StreamProvider
+  legalStatus: StreamLegalStatus
+  officialPageUrl: string | null
+  eventId: string | null
+  access: StreamAccess
 }

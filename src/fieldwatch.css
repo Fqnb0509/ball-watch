@@ -120,6 +120,8 @@ button { cursor: pointer; }
 .fw-play-ring { display: grid; width: 55px; height: 55px; margin: 0 auto 17px; border: 1px solid #4e5c66; border-radius: 50%; color: var(--fw-accent); place-items: center; font-size: 18px; }
 .fw-player-center strong { display: block; font-size: 15px; }
 .fw-player-center p { max-width: 380px; margin: 9px auto 0; color: #77848c; font-size: 11px; line-height: 1.7; }
+.fw-official-link { display: inline-flex; align-items: center; min-height: 32px; margin-top: 16px; border: 1px solid #465660; border-radius: 4px; padding: 0 12px; color: var(--fw-accent); background: #12191f; font-size: 11px; text-decoration: none; }
+.fw-official-link:hover { border-color: var(--fw-accent); color: #f6fbfc; }
 .fw-media { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; object-fit: contain; background: #000; }
 .fw-player .fw-media { z-index: 0; }
 .fw-player-label { position: absolute; top: 14px; right: 15px; left: 15px; z-index: 1; display: flex; justify-content: space-between; color: #6e7c85; font-size: 9px; letter-spacing: .1em; }
