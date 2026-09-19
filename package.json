@@ -11,6 +11,7 @@
     "test:stage4": "node scripts/verify-stage4.mjs",
     "test:stage5": "node scripts/verify-stage5.mjs",
     "test:stage6": "node scripts/verify-stage6.mjs",
+    "test:github-pages": "node scripts/verify-github-pages.mjs",
     "typecheck:functions": "tsc --noEmit -p tsconfig.functions.json",
     "preview": "vite preview"
   },

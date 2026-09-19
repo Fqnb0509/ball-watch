@@ -7,8 +7,7 @@ import {
 } from './api-football-schema'
 import type { ApiFootballFixtureDto, ParsedApiFootballEnvelope } from './api-football-schema'
 import type { MatchProvider, MatchProviderRequest, MatchProviderResult, ProviderMetadata } from './types'
-
-const API_PATH = '/api/matches'
+import { buildMatchApiPath } from '../runtime-config'
 const SUPPORTED_SPORTS: readonly Sport[] = ['football']
 const INVALID_RESPONSE_ERROR = '赛事数据服务返回了无效数据'
 const INVALID_RECORD_ERROR = '部分赛事数据记录无效，已安全忽略'
@@ -41,13 +40,13 @@ const toDateParameter = (value: string | undefined): string | null => {
 }
 
 export const buildApiFootballRequestPath = (request?: MatchProviderRequest): string => {
-  const parameters = new URLSearchParams()
+  const parameters = new URLSearchParams([['provider', API_FOOTBALL_PROVIDER_ID]])
   const from = toDateParameter(request?.from)
   const to = toDateParameter(request?.to)
   if (from) parameters.set('from', from)
   if (to) parameters.set('to', to)
   const query = parameters.toString()
-  return query ? `${API_PATH}?${query}` : API_PATH
+  return buildMatchApiPath(query)
 }
 
 const mapFixture = (item: ApiFootballFixtureDto): Match => {
@@ -135,6 +134,7 @@ const normalizeResponse = (raw: unknown): MatchProviderResult => {
 
 export const apiFootballMatchProvider: MatchProvider = {
   id: API_FOOTBALL_PROVIDER_ID,
+  priority: 20,
   supportedSports: SUPPORTED_SPORTS,
   metadata: METADATA,
   fetch: async (request) => {

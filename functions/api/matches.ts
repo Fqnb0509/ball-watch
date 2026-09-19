@@ -683,19 +683,43 @@ export const buildFootballDataMatchesUrl = (range: MatchDateRange): string => {
   return url.toString()
 }
 
+const CORS_ALLOWED_ORIGINS = new Set([
+  'https://fqnb0509.github.io',
+  'https://ball-watch.pages.dev',
+])
+
+const applyCorsHeaders = (headers: Headers, request: Request): Headers => {
+  headers.set('Vary', 'Origin')
+  headers.set('Access-Control-Allow-Methods', 'GET, OPTIONS')
+  headers.set('Access-Control-Allow-Headers', 'Content-Type')
+
+  const origin = request.headers.get('Origin')
+  if (origin && CORS_ALLOWED_ORIGINS.has(origin)) {
+    headers.set('Access-Control-Allow-Origin', origin)
+  } else {
+    headers.delete('Access-Control-Allow-Origin')
+  }
+  return headers
+}
+
+const hasAllowedOrNoOrigin = (request: Request): boolean => {
+  const origin = request.headers.get('Origin')
+  return !origin || CORS_ALLOWED_ORIGINS.has(origin)
+}
+
 const securityHeaders = (): Headers => {
   const headers = new Headers()
   headers.set('Content-Type', 'application/json; charset=utf-8')
   headers.set('Content-Security-Policy', "default-src 'none'; base-uri 'none'; frame-ancestors 'none'")
-  headers.set('Cross-Origin-Resource-Policy', 'same-origin')
+  headers.set('Cross-Origin-Resource-Policy', 'cross-origin')
   headers.set('Referrer-Policy', 'no-referrer')
   headers.set('X-Content-Type-Options', 'nosniff')
   headers.set('X-Frame-Options', 'DENY')
   return headers
 }
 
-const jsonResponse = (payload: unknown, status: number, cacheable = false): Response => {
-  const headers = securityHeaders()
+const jsonResponse = (payload: unknown, status: number, cacheable: boolean, request: Request): Response => {
+  const headers = applyCorsHeaders(securityHeaders(), request)
   if (cacheable) {
     headers.set('Cache-Control', `public, max-age=60, s-maxage=${EDGE_CACHE_TTL_SECONDS}, stale-while-revalidate=60`)
     headers.set('CDN-Cache-Control', `public, max-age=${EDGE_CACHE_TTL_SECONDS}`)
@@ -708,7 +732,8 @@ const jsonResponse = (payload: unknown, status: number, cacheable = false): Resp
 const errorResponse = (
   status: number,
   code: 'INVALID_QUERY' | 'INVALID_DATE' | 'INVALID_RANGE' | 'SERVICE_UNAVAILABLE' | 'UPSTREAM_TIMEOUT',
-): Response => jsonResponse({ error: { code, message: 'Match data is currently unavailable.' } }, status)
+  request: Request,
+): Response => jsonResponse({ error: { code, message: 'Match data is currently unavailable.' } }, status, false, request)
 
 const buildCacheKey = (
   requestUrl: string,
@@ -725,8 +750,8 @@ const buildCacheKey = (
   return new Request(url.toString(), { method: 'GET' })
 }
 
-const responseWithCacheStatus = (response: Response, status: 'HIT' | 'MISS'): Response => {
-  const headers = new Headers(response.headers)
+const responseWithCacheStatus = (response: Response, status: 'HIT' | 'MISS', request: Request): Response => {
+  const headers = applyCorsHeaders(new Headers(response.headers), request)
   headers.set('X-Fieldwatch-Cache', status)
   return new Response(response.body, {
     status: response.status,
@@ -750,6 +775,15 @@ export const handleMatchesRequest = async (
   context: PagesFunctionContext,
   dependencies: MatchesFunctionDependencies = defaultDependencies(),
 ): Promise<Response> => {
+  if (!hasAllowedOrNoOrigin(context.request)) {
+    return jsonResponse(
+      { error: { code: 'FORBIDDEN_ORIGIN', message: 'Request origin is not allowed.' } },
+      403,
+      false,
+      context.request,
+    )
+  }
+
   const url = new URL(context.request.url)
   const providerId = requestedProvider(url.searchParams)
   const diagnostics = createDiagnostics(context.env, providerId)
@@ -759,7 +793,7 @@ export const handleMatchesRequest = async (
     diagnostics.errorCode = dateRange.code
     diagnostics.responseStatus = 400
     logDiagnostics('error', 'REQUEST_REJECTED', diagnostics)
-    return errorResponse(400, dateRange.code)
+    return errorResponse(400, dateRange.code, context.request)
   }
 
   diagnostics.from = dateRange.value.from
@@ -771,7 +805,7 @@ export const handleMatchesRequest = async (
     diagnostics.errorCode = 'CONFIG_INVALID'
     diagnostics.responseStatus = 503
     logDiagnostics('error', 'CONFIG_INVALID', diagnostics)
-    return errorResponse(503, 'SERVICE_UNAVAILABLE')
+    return errorResponse(503, 'SERVICE_UNAVAILABLE', context.request)
   }
 
   diagnostics.leagueId = config.leagueId
@@ -821,7 +855,7 @@ export const handleMatchesRequest = async (
           expiresAt,
           matches: minimized.matches,
         }
-        return jsonResponse(payload, 200, true)
+        return jsonResponse(payload, 200, true, context.request)
       }
       const minimized = minimizeApiFootballResponse(raw)
       if (!minimized.ok) {
@@ -839,19 +873,35 @@ export const handleMatchesRequest = async (
         expiresAt,
         matches: minimized.matches,
       }
-      return jsonResponse(payload, 200, true)
+      return jsonResponse(payload, 200, true, context.request)
     },
   })
 
   Object.assign(diagnostics, requestResult.diagnostics)
   if (!requestResult.ok) {
     const publicCode = requestResult.code === 'UPSTREAM_TIMEOUT' ? 'UPSTREAM_TIMEOUT' : 'SERVICE_UNAVAILABLE'
-    return errorResponse(requestResult.status, publicCode)
+    return errorResponse(requestResult.status, publicCode, context.request)
   }
 
   diagnostics.responseStatus = requestResult.response.status
   logDiagnostics('log', requestResult.cacheHit ? 'CACHE_HIT' : 'UPSTREAM_OK', diagnostics)
-  return responseWithCacheStatus(requestResult.response, requestResult.cacheHit ? 'HIT' : 'MISS')
+  return responseWithCacheStatus(requestResult.response, requestResult.cacheHit ? 'HIT' : 'MISS', context.request)
 }
 
 export const onRequestGet = (context: PagesFunctionContext): Promise<Response> => handleMatchesRequest(context)
+
+export const onRequestOptions = (context: PagesFunctionContext): Response => {
+  if (!hasAllowedOrNoOrigin(context.request)) {
+    return jsonResponse(
+      { error: { code: 'FORBIDDEN_ORIGIN', message: 'Request origin is not allowed.' } },
+      403,
+      false,
+      context.request,
+    )
+  }
+
+  const headers = applyCorsHeaders(securityHeaders(), context.request)
+  headers.delete('Content-Type')
+  headers.set('Cache-Control', 'no-store')
+  return new Response(null, { status: 204, headers })
+}

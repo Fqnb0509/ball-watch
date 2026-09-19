@@ -7,8 +7,7 @@ import {
 } from './football-data-schema'
 import type { FootballDataMatchDto, ParsedFootballDataEnvelope } from './football-data-schema'
 import type { MatchProvider, MatchProviderRequest, MatchProviderResult, ProviderMetadata } from './types'
-
-const API_PATH = '/api/matches'
+import { buildMatchApiPath } from '../runtime-config'
 const SUPPORTED_SPORTS: readonly Sport[] = ['football']
 const INVALID_RESPONSE_ERROR = '赛事数据服务返回了无效数据'
 const INVALID_RECORD_ERROR = '部分赛事数据记录无效，已安全忽略'
@@ -42,7 +41,7 @@ export const buildFootballDataRequestPath = (request?: MatchProviderRequest): st
   const to = toDateParameter(request?.to)
   if (from) parameters.set('from', from)
   if (to) parameters.set('to', to)
-  return `${API_PATH}?${parameters.toString()}`
+  return buildMatchApiPath(parameters.toString())
 }
 
 const mapMatch = (item: FootballDataMatchDto): Match => {
