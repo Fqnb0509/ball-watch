@@ -383,6 +383,27 @@ const inQueryWindow = (match: Match, query: NormalizedQuery): boolean => {
   return true
 }
 
+const executeProvidersByPriority = async (
+  providers: MatchProvider[],
+  query: NormalizedQuery,
+  signal: AbortSignal,
+): Promise<ProviderOutcome[]> => {
+  const ordered = [...providers].sort((left, right) => (left.priority ?? 100) - (right.priority ?? 100))
+  const coveredSports = new Set<Sport>()
+  const outcomes: ProviderOutcome[] = []
+
+  for (const provider of ordered) {
+    if (provider.supportedSports.every((sport) => coveredSports.has(sport))) {
+      outcomes.push({ status: 'skipped', provider: provider.id })
+      continue
+    }
+    const outcome = await executeProvider(provider, query, signal)
+    outcomes.push(outcome)
+    if (outcome.status === 'success') provider.supportedSports.forEach((sport) => coveredSports.add(sport))
+  }
+  return outcomes
+}
+
 const executeProvider = async (provider: MatchProvider, query: NormalizedQuery, signal: AbortSignal): Promise<ProviderOutcome> => {
   if (circuitOpen(provider.id)) return { status: 'skipped', provider: provider.id }
   const request: MatchProviderRequest = {
@@ -436,11 +457,11 @@ const earliestTimestamp = (values: Array<string | null>): string | null => {
 }
 
 const aggregateProviders = async (providers: MatchProvider[], query: NormalizedQuery, signal: AbortSignal): Promise<ProviderData> => {
-  const outcomes = await Promise.all(providers.map((provider) => executeProvider(provider, query, signal)))
+  const outcomes = await executeProvidersByPriority(providers, query, signal)
   throwIfAborted(signal)
   const successful = outcomes.filter((outcome): outcome is ProviderSuccess => outcome.status === 'success')
   if (successful.length === 0) throw new ProviderDataError()
-  const failedCount = outcomes.length - successful.length
+  const failedCount = outcomes.filter((outcome): outcome is ProviderFailure => outcome.status === 'failure').length
   const hasWarnings = successful.some((outcome) => outcome.warning)
   return {
     provider: successful.map((outcome) => outcome.provider).sort().join(','),
@@ -460,7 +481,7 @@ const fetchHybridProviderData = async (
   query: NormalizedQuery,
   signal: AbortSignal,
 ): Promise<ProviderData> => {
-  const outcomes = await Promise.all(externalProviders.map((provider) => executeProvider(provider, query, signal)))
+  const outcomes = await executeProvidersByPriority(externalProviders, query, signal)
   throwIfAborted(signal)
 
   const successfulExternal = outcomes.filter((outcome): outcome is ProviderSuccess => outcome.status === 'success')
@@ -498,7 +519,6 @@ const fetchHybridProviderData = async (
 
   if (usedSuccesses.length === 0) throw new ProviderDataError()
 
-  const externalFailures = outcomes.length - successfulExternal.length
   const demoFailed = demoNeededSports.size > 0 && !demoSuccess
   const hasWarnings = usedSuccesses.some((outcome) => outcome.warning)
 
@@ -511,12 +531,12 @@ const fetchHybridProviderData = async (
     fallback: fallback || usedSuccesses.some((outcome) => outcome.fallback),
     error: fallback
       ? FALLBACK_ERROR
-      : externalFailures > 0 || demoFailed
+      : failedExternalSports.length > 0 || demoFailed
         ? PARTIAL_PROVIDER_ERROR
         : hasWarnings
           ? INVALID_RECORD_ERROR
           : null,
-    refreshFailed: externalFailures > 0 || demoFailed,
+    refreshFailed: failedExternalSports.length > 0 || demoFailed,
   }
 }
 

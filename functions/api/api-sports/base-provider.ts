@@ -1,4 +1,4 @@
-import { ApiSportsResponseError, type ApiSportsDiagnostics, type ApiSportsRequestFailure, type ApiSportsRequestOptions, type ApiSportsRequestResult } from './types'
+import { ApiSportsResponseError, type ApiSportsDiagnostics, type ApiSportsProviderDefinition, type ApiSportsRequestFailure, type ApiSportsRequestOptions, type ApiSportsRequestResult } from './types'
 
 const DEFAULT_TIMEOUT_MS = 8_000
 const DEFAULT_MAX_RETRIES = 2
@@ -248,7 +248,7 @@ const executeFresh = async (options: ApiSportsRequestOptions, diagnostics: ApiSp
           method: 'GET',
           headers: {
             Accept: 'application/json',
-            'x-apisports-key': options.key,
+            [options.provider.authHeader]: options.key,
           },
           credentials: 'omit',
           redirect: 'manual',
@@ -321,6 +321,14 @@ const executeFresh = async (options: ApiSportsRequestOptions, diagnostics: ApiSp
   const result = failure(options, diagnostics, timedOut ? 'UPSTREAM_TIMEOUT' : 'FETCH_FAILED', timedOut ? 504 : 502, lastError ?? undefined)
   notify(options, 'error', result.code, diagnostics)
   return result
+}
+
+export const readApiSportsCredential = (
+  env: { API_FOOTBALL_KEY?: string; FOOTBALL_DATA_TOKEN?: string },
+  provider: ApiSportsProviderDefinition,
+): string => {
+  const value = env[provider.keyEnv]
+  return typeof value === 'string' ? value.trim() : ''
 }
 
 export const readApiSportsKey = (env: { API_FOOTBALL_KEY?: string }): string => (

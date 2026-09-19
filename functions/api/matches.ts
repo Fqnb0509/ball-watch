@@ -1,10 +1,12 @@
-import { executeApiSportsRequest, readApiSportsKey } from './api-sports/base-provider'
-import { apiFootballProvider } from './api-sports/registry'
-import { ApiSportsResponseError, type ApiSportsCache, type ApiSportsSecretEnv } from './api-sports/types'
+import { executeApiSportsRequest, readApiSportsCredential } from './api-sports/base-provider'
+import { apiFootballProvider, footballDataProvider } from './api-sports/registry'
+import { ApiSportsResponseError, type ApiSportsCache, type ApiSportsProviderDefinition, type ApiSportsSecretEnv } from './api-sports/types'
 
 const API_FOOTBALL_FIXTURES_URL = `${apiFootballProvider.origin}${apiFootballProvider.path ?? ''}`
+const FOOTBALL_DATA_MATCHES_URL = `${footballDataProvider.origin}${footballDataProvider.path ?? ''}`
 const DEFAULT_LEAGUE_ID = '39'
 const DEFAULT_SEASON = '2026'
+const FOOTBALL_DATA_COMPETITION = 'PL'
 const DEFAULT_RANGE_DAYS = 7
 const MAX_RANGE_DAYS = 14
 const UPSTREAM_TIMEOUT_MS = 8_000
@@ -51,10 +53,32 @@ export type ApiFootballMatchesPayload = {
   matches: ApiFootballFixtureDto[]
 }
 
+export type FootballDataMatchDto = {
+  id: number
+  utcDate: string
+  status: string
+  competition: { name: string }
+  matchday: number | null
+  homeTeam: { id: number; name: string }
+  awayTeam: { id: number; name: string }
+  venue: string | null
+  score: { fullTime: { home: number | null; away: number | null } }
+}
+
+export type FootballDataMatchesPayload = {
+  provider: 'football-data'
+  fetchedAt: string
+  sourceUpdatedAt: null
+  expiresAt: string
+  matches: FootballDataMatchDto[]
+}
+
 type ApiFootballEnv = ApiSportsSecretEnv & {
   API_FOOTBALL_LEAGUE_ID?: string
   API_FOOTBALL_SEASON?: string
 }
+
+type MatchProviderId = 'football-data' | 'api-football'
 
 type PagesFunctionContext = {
   request: Request
@@ -124,11 +148,12 @@ type DateRangeResult =
   | { ok: true; value: MatchDateRange }
   | { ok: false; code: 'INVALID_QUERY' | 'INVALID_DATE' | 'INVALID_RANGE' }
 
-type MinimizedResponse =
-  | { ok: true; matches: ApiFootballFixtureDto[] }
+type MinimizedResponse<T> =
+  | { ok: true; matches: T[] }
   | { ok: false }
 
 type ApiFootballConfig = {
+  provider: ApiSportsProviderDefinition
   key: string
   leagueId: string
   season: string
@@ -197,15 +222,24 @@ const redactDiagnosticText = (value: string, secret: string): string | null => {
   return sanitized || null
 }
 
-const createDiagnostics = (env: ApiFootballEnv): MatchDiagnostics => {
-  const rawKey = typeof env.API_FOOTBALL_KEY === 'string' ? env.API_FOOTBALL_KEY : ''
+const providerForId = (providerId: MatchProviderId): ApiSportsProviderDefinition => (
+  providerId === 'football-data' ? footballDataProvider : apiFootballProvider
+)
+
+const createDiagnostics = (env: ApiFootballEnv, providerId: MatchProviderId): MatchDiagnostics => {
+  const provider = providerForId(providerId)
+  const rawKey = typeof env[provider.keyEnv] === 'string' ? env[provider.keyEnv] as string : ''
   const trimmedKey = rawKey.trim()
   return {
     requestId: createRequestId(),
     from: null,
     to: null,
-    leagueId: diagnosticConfigValue(env.API_FOOTBALL_LEAGUE_ID, /^\d{1,10}$/, DEFAULT_LEAGUE_ID),
-    season: diagnosticConfigValue(env.API_FOOTBALL_SEASON, /^\d{4}$/, DEFAULT_SEASON),
+    leagueId: providerId === 'football-data'
+      ? FOOTBALL_DATA_COMPETITION
+      : diagnosticConfigValue(env.API_FOOTBALL_LEAGUE_ID, /^\d{1,10}$/, DEFAULT_LEAGUE_ID),
+    season: providerId === 'football-data'
+      ? 'dynamic'
+      : diagnosticConfigValue(env.API_FOOTBALL_SEASON, /^\d{4}$/, DEFAULT_SEASON),
     keyPresent: trimmedKey.length > 0,
     keyLength: rawKey.length,
     keyHasLeadingOrTrailingWhitespace: rawKey !== trimmedKey,
@@ -256,10 +290,17 @@ const addUtcDays = (dateKey: string, days: number): string => {
 export const parseMatchDateRange = (searchParams: URLSearchParams, now: Date): DateRangeResult => {
   let hasUnexpectedParameter = false
   searchParams.forEach((_value, key) => {
-    if (key !== 'from' && key !== 'to') hasUnexpectedParameter = true
+    if (key !== 'from' && key !== 'to' && key !== 'provider') hasUnexpectedParameter = true
   })
 
-  if (hasUnexpectedParameter || searchParams.getAll('from').length > 1 || searchParams.getAll('to').length > 1) {
+  const requestedProvider = searchParams.get('provider')
+  if (
+    hasUnexpectedParameter
+    || searchParams.getAll('from').length > 1
+    || searchParams.getAll('to').length > 1
+    || searchParams.getAll('provider').length > 1
+    || (requestedProvider !== null && requestedProvider !== 'football-data' && requestedProvider !== 'api-football')
+  ) {
     return { ok: false, code: 'INVALID_QUERY' }
   }
 
@@ -281,6 +322,10 @@ export const parseMatchDateRange = (searchParams: URLSearchParams, now: Date): D
 
   return { ok: true, value: { from, to } }
 }
+
+const requestedProvider = (searchParams: URLSearchParams): MatchProviderId => (
+  searchParams.get('provider') === 'api-football' ? 'api-football' : 'football-data'
+)
 
 const readRecord = (value: unknown): Record<string, unknown> | null => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
@@ -442,7 +487,7 @@ const minimizeFixture = (value: unknown): ApiFootballFixtureDto | null => {
 }
 
 /** Removes all upstream fields that FIELDWATCH does not consume. */
-export const minimizeApiFootballResponse = (raw: unknown): MinimizedResponse => {
+export const minimizeApiFootballResponse = (raw: unknown): MinimizedResponse<ApiFootballFixtureDto> => {
   const body = readRecord(raw)
   if (!body || hasUpstreamErrors(body.errors) || !Array.isArray(body.response)) return { ok: false }
 
@@ -452,6 +497,120 @@ export const minimizeApiFootballResponse = (raw: unknown): MinimizedResponse => 
 
   if (body.response.length > 0 && matches.length === 0) return { ok: false }
   return { ok: true, matches }
+}
+
+const FOOTBALL_DATA_STATUS_CODES = new Set([
+  'SCHEDULED',
+  'TIMED',
+  'IN_PLAY',
+  'PAUSED',
+  'FINISHED',
+  'POSTPONED',
+  'SUSPENDED',
+  'CANCELLED',
+  'AWARDED',
+])
+
+const readOptionalScore = (value: unknown): number | null | undefined => {
+  if (value === undefined || value === null) return null
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
+}
+
+const readOptionalPositiveInteger = (value: unknown): number | null | undefined => {
+  if (value === undefined || value === null) return null
+  return readPositiveInteger(value)
+}
+
+const minimizeFootballDataMatch = (value: unknown): FootballDataMatchDto | null => {
+  const item = readRecord(value)
+  const competition = readRecord(item?.competition)
+  const homeTeam = readRecord(item?.homeTeam)
+  const awayTeam = readRecord(item?.awayTeam)
+  const score = readRecord(item?.score)
+  const fullTime = readRecord(score?.fullTime)
+  const matchId = readPositiveInteger(item?.id)
+  const utcDate = readText(item?.utcDate, 64)
+  const status = readText(item?.status, 32)
+  const competitionName = readText(competition?.name, 200)
+  const matchday = readOptionalPositiveInteger(item?.matchday)
+  const homeId = readPositiveInteger(homeTeam?.id)
+  const homeName = readText(homeTeam?.name, 200)
+  const awayId = readPositiveInteger(awayTeam?.id)
+  const awayName = readText(awayTeam?.name, 200)
+  const venue = item?.venue === undefined || item?.venue === null ? null : readText(item.venue, 200)
+  const homeScore = readOptionalScore(fullTime?.home)
+  const awayScore = readOptionalScore(fullTime?.away)
+
+  if (
+    matchId === null
+    || !utcDate
+    || !OFFSET_DATE_TIME_PATTERN.test(utcDate)
+    || !Number.isFinite(Date.parse(utcDate))
+    || !status
+    || !FOOTBALL_DATA_STATUS_CODES.has(status)
+    || !competitionName
+    || matchday === undefined
+    || homeId === null
+    || !homeName
+    || awayId === null
+    || !awayName
+    || venue === undefined
+    || homeScore === undefined
+    || awayScore === undefined
+  ) return null
+
+  return {
+    id: matchId,
+    utcDate,
+    status,
+    competition: { name: competitionName },
+    matchday,
+    homeTeam: { id: homeId, name: homeName },
+    awayTeam: { id: awayId, name: awayName },
+    venue,
+    score: { fullTime: { home: homeScore, away: awayScore } },
+  }
+}
+
+/** Keeps only the football-data fields consumed by the browser provider. */
+export const minimizeFootballDataResponse = (raw: unknown): MinimizedResponse<FootballDataMatchDto> => {
+  const body = readRecord(raw)
+  if (!body || hasUpstreamErrors(body.errors) || !Array.isArray(body.matches)) return { ok: false }
+
+  const matches = body.matches
+    .map(minimizeFootballDataMatch)
+    .filter((match): match is FootballDataMatchDto => match !== null)
+
+  if (body.matches.length > 0 && matches.length === 0) return { ok: false }
+  return { ok: true, matches }
+}
+
+const inspectFootballDataResponse = (raw: unknown, secret: string): Pick<
+  MatchDiagnostics,
+  | 'upstreamErrorsPresent'
+  | 'upstreamErrorKeys'
+  | 'upstreamErrorMessages'
+  | 'responseIsArray'
+  | 'responseCount'
+  | 'validFixtureCount'
+> => {
+  const body = readRecord(raw)
+  const response = body?.matches
+  const responseIsArray = Array.isArray(response)
+  const responseCount = responseIsArray ? response.length : null
+  const validFixtureCount = responseIsArray
+    ? response.filter((item) => minimizeFootballDataMatch(item) !== null).length
+    : null
+  const errorValue = body?.errors ?? body?.error
+  const errorSummary = summarizeUpstreamErrors(errorValue, secret)
+
+  return {
+    upstreamErrorsPresent: hasUpstreamErrors(errorValue),
+    ...errorSummary,
+    responseIsArray,
+    responseCount,
+    validFixtureCount,
+  }
 }
 
 const inspectApiFootballResponse = (raw: unknown, secret: string): Pick<
@@ -481,8 +640,15 @@ const inspectApiFootballResponse = (raw: unknown, secret: string): Pick<
   }
 }
 
-const resolveConfig = (env: ApiFootballEnv): ApiFootballConfig | null => {
-  const key = readApiSportsKey(env)
+const resolveConfig = (env: ApiFootballEnv, providerId: MatchProviderId): ApiFootballConfig | null => {
+  const provider = providerForId(providerId)
+  const key = readApiSportsCredential(env, provider)
+  if (!key) return null
+
+  if (providerId === 'football-data') {
+    return { provider, key, leagueId: FOOTBALL_DATA_COMPETITION, season: 'dynamic' }
+  }
+
   const leagueId = typeof env.API_FOOTBALL_LEAGUE_ID === 'string'
     ? env.API_FOOTBALL_LEAGUE_ID.trim()
     : DEFAULT_LEAGUE_ID
@@ -490,8 +656,8 @@ const resolveConfig = (env: ApiFootballEnv): ApiFootballConfig | null => {
     ? env.API_FOOTBALL_SEASON.trim()
     : DEFAULT_SEASON
 
-  if (!key || !/^\d{1,10}$/.test(leagueId) || !/^\d{4}$/.test(season)) return null
-  return { key, leagueId, season }
+  if (!/^\d{1,10}$/.test(leagueId) || !/^\d{4}$/.test(season)) return null
+  return { provider, key, leagueId, season }
 }
 
 /** Builds the one fixed upstream URL. No client-controlled URL or query is forwarded. */
@@ -506,6 +672,14 @@ export const buildApiFootballFixturesUrl = (
   url.searchParams.set('league', leagueId)
   url.searchParams.set('season', season)
   url.searchParams.set('timezone', 'UTC')
+  return url.toString()
+}
+
+/** Builds the fixed Premier League endpoint. The API selects its current season when season is omitted. */
+export const buildFootballDataMatchesUrl = (range: MatchDateRange): string => {
+  const url = new URL(FOOTBALL_DATA_MATCHES_URL)
+  url.searchParams.set('dateFrom', range.from)
+  url.searchParams.set('dateTo', range.to)
   return url.toString()
 }
 
@@ -539,12 +713,13 @@ const errorResponse = (
 const buildCacheKey = (
   requestUrl: string,
   range: MatchDateRange,
-  config: Pick<ApiFootballConfig, 'leagueId' | 'season'>,
+  config: Pick<ApiFootballConfig, 'provider' | 'leagueId' | 'season'>,
 ): Request => {
   const url = new URL(requestUrl)
   url.search = ''
   url.searchParams.set('from', range.from)
   url.searchParams.set('to', range.to)
+  url.searchParams.set('__provider', config.provider.id)
   url.searchParams.set('__league', config.leagueId)
   url.searchParams.set('__season', config.season)
   return new Request(url.toString(), { method: 'GET' })
@@ -575,8 +750,9 @@ export const handleMatchesRequest = async (
   context: PagesFunctionContext,
   dependencies: MatchesFunctionDependencies = defaultDependencies(),
 ): Promise<Response> => {
-  const diagnostics = createDiagnostics(context.env)
   const url = new URL(context.request.url)
+  const providerId = requestedProvider(url.searchParams)
+  const diagnostics = createDiagnostics(context.env, providerId)
   const dateRange = parseMatchDateRange(url.searchParams, dependencies.now())
   if (!dateRange.ok) {
     diagnostics.errorName = dateRange.code
@@ -589,7 +765,7 @@ export const handleMatchesRequest = async (
   diagnostics.from = dateRange.value.from
   diagnostics.to = dateRange.value.to
 
-  const config = resolveConfig(context.env)
+  const config = resolveConfig(context.env, providerId)
   if (!config) {
     diagnostics.errorName = 'CONFIG_INVALID'
     diagnostics.errorCode = 'CONFIG_INVALID'
@@ -603,9 +779,11 @@ export const handleMatchesRequest = async (
 
   const cacheKey = buildCacheKey(context.request.url, dateRange.value, config)
 
-  const upstreamUrl = buildApiFootballFixturesUrl(dateRange.value, config.leagueId, config.season)
+  const upstreamUrl = providerId === 'football-data'
+    ? buildFootballDataMatchesUrl(dateRange.value)
+    : buildApiFootballFixturesUrl(dateRange.value, config.leagueId, config.season)
   const requestResult = await executeApiSportsRequest({
-    provider: apiFootballProvider,
+    provider: config.provider,
     url: upstreamUrl,
     cacheKey,
     key: config.key,
@@ -620,7 +798,31 @@ export const handleMatchesRequest = async (
       logDiagnostics(level, event, diagnostics)
     },
     buildResponse: (raw, fetchedAtDate, baseDiagnostics) => {
-      Object.assign(baseDiagnostics, inspectApiFootballResponse(raw, config.key))
+      const inspection = providerId === 'football-data'
+        ? inspectFootballDataResponse(raw, config.key)
+        : inspectApiFootballResponse(raw, config.key)
+      Object.assign(baseDiagnostics, inspection)
+      const fetchedAt = fetchedAtDate.toISOString()
+      const expiresAt = new Date(fetchedAtDate.getTime() + EDGE_CACHE_TTL_SECONDS * 1_000).toISOString()
+      if (providerId === 'football-data') {
+        const minimized = minimizeFootballDataResponse(raw)
+        if (!minimized.ok) {
+          const errorCode = baseDiagnostics.upstreamErrorsPresent
+            ? 'UPSTREAM_ERRORS'
+            : 'INVALID_RESPONSE_SCHEMA'
+          baseDiagnostics.errorName = errorCode
+          baseDiagnostics.errorCode = errorCode
+          throw new ApiSportsResponseError(errorCode)
+        }
+        const payload: FootballDataMatchesPayload = {
+          provider: 'football-data',
+          fetchedAt,
+          sourceUpdatedAt: null,
+          expiresAt,
+          matches: minimized.matches,
+        }
+        return jsonResponse(payload, 200, true)
+      }
       const minimized = minimizeApiFootballResponse(raw)
       if (!minimized.ok) {
         const errorCode = baseDiagnostics.upstreamErrorsPresent
@@ -630,9 +832,6 @@ export const handleMatchesRequest = async (
         baseDiagnostics.errorCode = errorCode
         throw new ApiSportsResponseError(errorCode)
       }
-
-      const fetchedAt = fetchedAtDate.toISOString()
-      const expiresAt = new Date(fetchedAtDate.getTime() + EDGE_CACHE_TTL_SECONDS * 1_000).toISOString()
       const payload: ApiFootballMatchesPayload = {
         provider: 'api-football',
         fetchedAt,

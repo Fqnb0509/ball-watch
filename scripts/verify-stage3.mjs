@@ -33,6 +33,27 @@ const envelope = (matches) => ({
   matches,
 })
 
+const footballDataMatch = (overrides = {}) => ({
+  id: 987654,
+  utcDate: '2026-09-20T04:30:00.000Z',
+  status: 'SCHEDULED',
+  competition: { name: 'Premier League' },
+  matchday: 5,
+  homeTeam: { id: 61, name: 'Home FC' },
+  awayTeam: { id: 62, name: 'Away FC' },
+  venue: 'Football Data Stadium',
+  score: { fullTime: { home: null, away: null } },
+  ...overrides,
+})
+
+const footballDataEnvelope = (matches) => ({
+  provider: 'football-data',
+  fetchedAt,
+  sourceUpdatedAt: null,
+  expiresAt,
+  matches,
+})
+
 const jsonResponse = (value, init = {}) => new Response(JSON.stringify(value), {
   status: 200,
   headers: { 'Content-Type': 'application/json' },
@@ -67,6 +88,9 @@ try {
   const functionModule = await vite.ssrLoadModule('/functions/api/matches.ts')
   const schemaModule = await vite.ssrLoadModule('/src/match-providers/api-football-schema.ts')
   const providerModule = await vite.ssrLoadModule('/src/match-providers/api-football-provider.ts')
+  const footballDataSchema = await vite.ssrLoadModule('/src/match-providers/football-data-schema.ts')
+  const footballDataProvider = await vite.ssrLoadModule('/src/match-providers/football-data-provider.ts')
+  const identityModule = await vite.ssrLoadModule('/src/services/match-identity.ts')
   const matchService = await vite.ssrLoadModule('/src/services/match-service.ts')
   const youtubeModule = await vite.ssrLoadModule('/src/stream-providers/youtube-provider.ts')
 
@@ -95,7 +119,7 @@ try {
     let requestUrl = ''
     let requestInit
     const response = await functionModule.handleMatchesRequest({
-      request: new Request('https://fieldwatch.example/api/matches?from=2026-09-19&to=2026-09-20'),
+      request: new Request('https://fieldwatch.example/api/matches?provider=api-football&from=2026-09-19&to=2026-09-20'),
       env: {
         API_FOOTBALL_KEY: fakeSecret,
         API_FOOTBALL_LEAGUE_ID: '39',
@@ -129,7 +153,7 @@ try {
     const upstreamBody = 'upstream-response-body-marker'
     const upstreamHeader = 'upstream-header-marker'
     const response = await functionModule.handleMatchesRequest({
-      request: new Request('https://fieldwatch.example/api/matches?from=2026-09-19&to=2026-09-20'),
+      request: new Request('https://fieldwatch.example/api/matches?provider=api-football&from=2026-09-19&to=2026-09-20'),
       env: { API_FOOTBALL_KEY: 'test-only-not-a-real-key' },
     }, {
       now: () => fixedNow,
@@ -156,6 +180,44 @@ try {
     assert.equal(publicBody.includes(redirectLocation), false)
     assert.equal(publicBody.includes(upstreamBody), false)
     assert.equal(publicBody.includes(upstreamHeader), false)
+  })
+
+  test('Function proxies football-data through the fixed origin and auth header', async () => {
+    const fakeToken = 'test-only-not-a-real-token'
+    let requestUrl = ''
+    let requestInit
+    const response = await functionModule.handleMatchesRequest({
+      request: new Request('https://fieldwatch.example/api/matches?from=2026-09-19&to=2026-09-20'),
+      env: { FOOTBALL_DATA_TOKEN: fakeToken },
+    }, {
+      now: () => fixedNow,
+      cache: null,
+      fetch: async (url, init) => {
+        requestUrl = String(url)
+        requestInit = init
+        return jsonResponse({ matches: [footballDataMatch()] })
+      },
+    })
+
+    assert.equal(response.status, 200)
+    const upstream = new URL(requestUrl)
+    assert.equal(`${upstream.origin}${upstream.pathname}`, 'https://api.football-data.org/v4/competitions/PL/matches')
+    assert.deepEqual([...upstream.searchParams.keys()].sort(), ['dateFrom', 'dateTo'])
+    assert.equal(new Headers(requestInit.headers).get('X-Auth-Token'), fakeToken)
+    assert.equal(requestInit.redirect, 'manual')
+    const publicBody = await response.text()
+    assert.equal(publicBody.includes(fakeToken), false)
+    assert.equal(publicBody.includes('X-Auth-Token'), false)
+  })
+
+  test('Function minimizes football-data records and isolates malformed entries', () => {
+    const valid = footballDataMatch()
+    const invalid = footballDataMatch({ id: 0 })
+    const mixed = functionModule.minimizeFootballDataResponse({ matches: [valid, invalid] })
+    assert.equal(mixed.ok, true)
+    assert.equal(mixed.matches.length, 1)
+    assert.equal(functionModule.minimizeFootballDataResponse({ matches: [invalid] }).ok, false)
+    assert.equal(functionModule.minimizeFootballDataResponse({ matches: [] }).ok, true)
   })
 
   test('Function rejects arbitrary query passthrough before upstream access', async () => {
@@ -212,6 +274,35 @@ try {
     assert.match(invalidRoot.error, /无效/)
   })
 
+  test('football-data maps status, identity, UTC time and score', () => {
+    const result = footballDataProvider.footballDataMatchProvider.normalize(footballDataEnvelope([
+      footballDataMatch({ status: 'FINISHED', score: { fullTime: { home: 2, away: 1 } } }),
+    ]))
+    assert.equal(result.error, null)
+    assert.equal(result.matches.length, 1)
+    const match = result.matches[0]
+    assert.equal(match.id, 'football-data-987654')
+    assert.equal(match.sourceProvider, 'football-data')
+    assert.equal(match.providerEventId, '987654')
+    assert.equal(match.externalIds['football-data'], '987654')
+    assert.equal(match.startTime, '2026-09-20T04:30:00.000Z')
+    assert.equal(match.date, match.startTime)
+    assert.equal(match.status, 'finished')
+    assert.deepEqual(match.score, [2, 1])
+    assert.equal(match.homeTeam.id, 'football-data:team:61')
+  })
+
+  test('football-data schema maps every supported status', () => {
+    const expected = {
+      SCHEDULED: 'upcoming', TIMED: 'upcoming', IN_PLAY: 'live', PAUSED: 'live',
+      FINISHED: 'finished', POSTPONED: 'postponed', SUSPENDED: 'suspended',
+      CANCELLED: 'cancelled', AWARDED: 'finished',
+    }
+    for (const [status, mapped] of Object.entries(expected)) {
+      assert.equal(footballDataSchema.mapFootballDataStatus(status), mapped)
+    }
+  })
+
   test('Browser provider requests only the same-origin Function path', async () => {
     let requested = ''
     let init
@@ -224,8 +315,26 @@ try {
       from: '2026-09-19T00:00:00.000Z',
       to: '2026-09-20T23:59:59.000Z',
     })
-    assert.equal(requested, '/api/matches?from=2026-09-19&to=2026-09-20')
+    assert.equal(requested, '/api/matches?provider=api-football&from=2026-09-19&to=2026-09-20')
     assert.deepEqual([...new Headers(init.headers).keys()], ['accept'])
+  })
+
+  test('football-data failure falls back to API-Football', async () => {
+    let calls = 0
+    globalThis.fetch = async (input) => {
+      calls += 1
+      if (String(input).includes('provider=football-data')) return new Response(null, { status: 503 })
+      return jsonResponse(envelope([fixture()]))
+    }
+    const snapshot = await matchService.getMatchSnapshot({
+      sport: 'football',
+      from: '2026-09-19T00:00:00.000Z',
+      to: '2026-09-21T23:59:59.000Z',
+      forceRefresh: true,
+    })
+    assert.equal(calls, 4)
+    assert.equal(snapshot.data.some((match) => match.id === 'api-football-123456'), true)
+    assert.equal(snapshot.data.some((match) => match.sourceProvider === 'demo'), false)
   })
 
   test('API failure without cache falls back to all Demo sports', async () => {
@@ -239,7 +348,7 @@ try {
     assert.equal(snapshot.metadata.stale, true)
     assert.equal(snapshot.data.some((match) => match.sport === 'football'), true)
     assert.equal(snapshot.data.some((match) => match.id === 'youtube-savannah-bananas-test'), true)
-    assert.equal(calls, 3)
+    assert.equal(calls, 6)
   })
 
   test('Successful API data retains non-football Demo matches', async () => {
@@ -271,6 +380,29 @@ try {
     const cached = await matchService.getMatchSnapshot()
     assert.equal(cached.data.some((match) => match.sport === 'football'), false)
     assert.equal(calls, 1)
+  })
+
+  test('football-data success with an empty result does not call API-Football or invent Demo football', async () => {
+    let calls = 0
+    globalThis.fetch = async (input) => {
+      calls += 1
+      assert.equal(String(input).includes('provider=football-data'), true)
+      return jsonResponse(footballDataEnvelope([]))
+    }
+    const snapshot = await matchService.getMatchSnapshot({
+      sport: 'football',
+      from: '2031-09-19T00:00:00.000Z',
+      to: '2031-09-20T23:59:59.000Z',
+      forceRefresh: true,
+    })
+    assert.equal(calls, 1)
+    assert.equal(snapshot.data.some((match) => match.sport === 'football'), false)
+  })
+
+  test('same football event from both providers is deduplicated by exact names and UTC start', () => {
+    const apiMatch = providerModule.apiFootballMatchProvider.normalize(envelope([fixture()])).matches[0]
+    const dataMatch = footballDataProvider.footballDataMatchProvider.normalize(footballDataEnvelope([footballDataMatch()])).matches[0]
+    assert.equal(identityModule.dedupeMatches([apiMatch, dataMatch]).length, 1)
   })
 
   test('Identical concurrent queries share one in-flight Provider request', async () => {
@@ -309,6 +441,9 @@ try {
     assert.equal(bundle.includes('API_FOOTBALL_KEY'), false)
     assert.equal(bundle.includes('x-apisports-key'), false)
     assert.equal(bundle.includes('v3.football.api-sports.io'), false)
+    assert.equal(bundle.includes('FOOTBALL_DATA_TOKEN'), false)
+    assert.equal(bundle.includes('X-Auth-Token'), false)
+    assert.equal(bundle.includes('api.football-data.org'), false)
   })
 
   let failures = 0
