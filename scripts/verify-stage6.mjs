@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 import { createServer } from 'vite'
 
 const projectRoot = process.cwd()
@@ -81,6 +81,28 @@ try {
     const matchesData = await vite.ssrLoadModule('/src/matches-data.ts?stage6-intl-fallback')
     assert.ok(matchesData.matches.length > 0)
     Intl.DateTimeFormat = NativeDateTimeFormat
+  })
+
+  test('Missing formatToParts uses the UTC fallback without blocking module initialization', async () => {
+    const NativeDateTimeFormat = originalDateTimeFormat
+    Intl.DateTimeFormat = function DateTimeFormat(locale, options) {
+      const formatter = new NativeDateTimeFormat(locale, options)
+      return { format: formatter.format.bind(formatter) }
+    }
+    const formatter = compat.createSafeDateTimeFormatter('en-US', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' })
+    assert.equal(formatter.format(new Date('2026-09-19T16:30:00.000Z')), '2026-09-19')
+    assert.deepEqual(formatter.formatToParts(new Date('2026-09-19T16:30:00.000Z')).map((part) => part.type), ['year', 'month', 'day'])
+    const matchesData = await vite.ssrLoadModule('/src/matches-data.ts?stage6-missing-format-to-parts')
+    assert.ok(matchesData.matches.length > 0)
+    Intl.DateTimeFormat = NativeDateTimeFormat
+  })
+
+  test('Production bundle targets old Safari syntax compatibility', async () => {
+    const assetNames = (await readdir('dist/assets')).filter((name) => name.endsWith('.js'))
+    assert.ok(assetNames.length > 0, 'production JavaScript asset is missing; run pnpm run build first')
+    const source = (await Promise.all(assetNames.map((name) => readFile(`dist/assets/${name}`, 'utf8')))).join('\n')
+    assert.equal((source.match(/\?\./g) ?? []).length, 0)
+    assert.equal((source.match(/\?\?/g) ?? []).length, 0)
   })
 
   test('Offline match request succeeds without AbortController and resolves loading data', async () => {

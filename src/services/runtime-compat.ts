@@ -92,10 +92,24 @@ const fallbackFormatter = (options: Intl.DateTimeFormatOptions): SafeDateTimeFor
 const supportsTimeZone = (timeZone: string): boolean => {
   if (typeof Intl === 'undefined' || typeof Intl.DateTimeFormat !== 'function') return false
   try {
-    new Intl.DateTimeFormat('en-US', { timeZone }).format(0)
-    return true
+    const formatter = new Intl.DateTimeFormat('en-US', { timeZone })
+    return typeof formatter.format === 'function'
+      && typeof formatter.formatToParts === 'function'
+      && formatter.formatToParts(0).length > 0
   } catch {
     return false
+  }
+}
+
+const createNativeFormatter = (locale: string, options: Intl.DateTimeFormatOptions): SafeDateTimeFormatter | null => {
+  try {
+    const formatter = new Intl.DateTimeFormat(locale, options)
+    if (typeof formatter.format !== 'function' || typeof formatter.formatToParts !== 'function') return null
+    formatter.format(0)
+    formatter.formatToParts(0)
+    return formatter
+  } catch {
+    return null
   }
 }
 
@@ -103,15 +117,9 @@ export const createSafeDateTimeFormatter = (locale: string, options: Intl.DateTi
   if (typeof Intl === 'undefined' || typeof Intl.DateTimeFormat !== 'function') return fallbackFormatter(options)
   const timeZone = options.timeZone
   const safeOptions = { ...options, ...(timeZone ? { timeZone: supportsTimeZone(timeZone) ? timeZone : 'UTC' } : {}) }
-  try {
-    return new Intl.DateTimeFormat(locale, safeOptions)
-  } catch {
-    try {
-      return new Intl.DateTimeFormat('en-US', { year: options.year, month: options.month, day: options.day, hour: options.hour, minute: options.minute, second: options.second, timeZone: 'UTC' })
-    } catch {
-      return fallbackFormatter(options)
-    }
-  }
+  return createNativeFormatter(locale, safeOptions)
+    ?? createNativeFormatter('en-US', { year: options.year, month: options.month, day: options.day, hour: options.hour, minute: options.minute, second: options.second, timeZone: 'UTC' })
+    ?? fallbackFormatter({ ...options, ...(timeZone ? { timeZone: 'UTC' } : {}) })
 }
 
 export const createRecordFromEntries = <T,>(entries: readonly (readonly [string, T])[]): Record<string, T> => {
