@@ -12,9 +12,11 @@
 ## 本地命令
 
 ```bash
-pnpm install
+pnpm install --frozen-lockfile --offline
 pnpm run lint
+pnpm run typecheck:functions
 pnpm run build
+pnpm run test:stage3
 pnpm run dev
 ```
 
@@ -31,9 +33,22 @@ pnpm run dev
 
 当前应用没有独立 URL 路由；首页、详情页和观看页均由同一个 SPA 入口内的状态切换完成，因此不需要额外重写规则。
 
+### API-Football 赛事 Function
+
+浏览器只请求同源的 `GET /api/matches?from=YYYY-MM-DD&to=YYYY-MM-DD`。Cloudflare Pages Function 在服务端访问固定的 API-Football fixtures endpoint，前端不会直接连接上游。
+
+在 Cloudflare Pages 的生产环境变量和密钥中配置：
+
+- `API_FOOTBALL_KEY`：必须配置为 Secret，只在 Pages Function 服务端读取。不要使用 `VITE_*` 名称，也不要写入前端源码、日志或 Git。
+- `API_FOOTBALL_LEAGUE_ID`：普通变量，可选，默认 `39`。
+- `API_FOOTBALL_SEASON`：普通变量，可选，默认 `2026`。
+
+本地 Functions 调试如需凭据，只能使用被 Git 忽略的 `.dev.vars`；该文件不得提交。Stage 3 的 `pnpm run test:stage3` 使用假凭据和模拟响应，完全离线，不会消耗 API 配额。
+
 ## 数据与直播源
 
-- 赛事数据：`src/matches-data.ts`
+- 赛事 Provider：`src/match-providers/`；API-Football 用于足球，`src/matches-data.ts` 作为 Demo/fallback fixture
+- 赛事聚合、缓存与容错：`src/services/match-service.ts`
 - Demo 直播源：`src/stream-data.ts`
 - 数据缓存：`src/services/match-service.ts`
 - 直播 URL 策略：`src/services/stream-url-policy.ts`
