@@ -25,7 +25,8 @@ const teamIdentity = (team: Team) => encodeIdentity([normalizeIdentifier(team.id
 const identityKeys = (match: Match): string[] => {
   const provider = normalizeLabel(match.sourceProvider)
   const eventId = normalizeIdentifier(match.providerEventId)
-  if (provider && eventId) return [`provider:${encodeIdentity([provider, eventId])}`]
+  const keys: string[] = []
+  if (provider && eventId) keys.push(`provider:${encodeIdentity([provider, eventId])}`)
 
   const external = match.externalIds
     ? Object.entries(match.externalIds)
@@ -34,17 +35,27 @@ const identityKeys = (match: Match): string[] => {
       .sort(([leftKey, leftValue], [rightKey, rightValue]) => leftKey.localeCompare(rightKey) || leftValue.localeCompare(rightValue))
       .map(([key, value]) => `external:${encodeIdentity([key, value])}`)
     : []
-  if (external.length) return external
+  keys.push(...external)
 
   const start = utcStart(match)
-  if (!start) return [`invalid:${encodeIdentity([normalizeIdentifier(match.id)])}`]
-  return [`composite:${encodeIdentity([
-    normalizeLabel(match.sport),
-    normalizeLabel(match.league),
-    teamIdentity(match.homeTeam),
-    teamIdentity(match.awayTeam),
-    start,
-  ])}`]
+  if (start) {
+    keys.push(`teams:${encodeIdentity([
+      normalizeLabel(match.sport),
+      normalizeLabel(match.league),
+      teamIdentity(match.homeTeam),
+      teamIdentity(match.awayTeam),
+      start,
+    ])}`)
+    keys.push(`names:${encodeIdentity([
+      normalizeLabel(match.sport),
+      normalizeLabel(match.league),
+      normalizeLabel(match.homeTeam.name),
+      normalizeLabel(match.awayTeam.name),
+      start,
+    ])}`)
+  }
+
+  return keys.length ? keys : [`invalid:${encodeIdentity([normalizeIdentifier(match.id)])}`]
 }
 
 /**

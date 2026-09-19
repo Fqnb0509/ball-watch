@@ -7,6 +7,7 @@ const demoStream = (stream: Omit<Stream, 'provider' | 'legalStatus' | 'officialP
   officialPageUrl: null,
   eventId: null,
   access: 'player',
+  sourceKind: 'unknown',
 })
 
 export const streams: Stream[] = [

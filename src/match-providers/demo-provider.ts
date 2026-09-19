@@ -106,6 +106,7 @@ const buildResult = (raw: unknown, fetchedAt: string, request?: MatchProviderReq
 
 export const demoMatchProvider: MatchProvider = {
   id: 'demo',
+  priority: 1000,
   supportedSports: DEMO_SPORTS,
   metadata: DEMO_METADATA,
   fetch: async (request) => {

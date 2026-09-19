@@ -8,6 +8,7 @@ import type { FavoriteState, RecentWatch } from './storage'
 import { checkStreamHealth } from './services/stream-health-service'
 import { getNextSource, hasLegalSourceForMatch } from './services/stream-service'
 import { getSafeOfficialPageUrl } from './services/stream-url-policy'
+import { createRecordFromEntries, createSafeAbortController } from './services/runtime-compat'
 import type { Match, MatchStatus, Sport, Stream, StreamHealth } from './types'
 import type { StreamQueryStatus } from './services/stream-query-service'
 import { addDays, dateKey, formatDate, formatTime, statusLabels, statusOrder, healthLabels, sourceKindLabels, getSourceKind, matchSearchText, matchDataSummary, streamSummary, visibleSources, canPlaySource, selectSource, isAuthorizedSource, NO_LIVE_SOURCE } from './ui/presentation'
@@ -55,9 +56,9 @@ export default function FieldWatchApp() {
   useEffect(() => {
     if (!selectedId) return
     let active = true
-    const controller = new AbortController()
+    const controller = createSafeAbortController()
     if (streams.length) void Promise.all(visibleSources(streams).filter(isAuthorizedSource).map((stream) => checkStreamHealth(stream, undefined, controller.signal))).then((results) => {
-      if (active) setSourceHealth((current) => ({ ...current, ...Object.fromEntries(results.map((result) => [result.streamId, { status: result.status, lastCheckedAt: result.lastCheckedAt, latency: result.latency, errorMessage: result.errorMessage }])) }))
+      if (active) setSourceHealth((current) => ({ ...current, ...createRecordFromEntries(results.map((result) => [result.streamId, { status: result.status, lastCheckedAt: result.lastCheckedAt, latency: result.latency, errorMessage: result.errorMessage }] as const)) }))
     })
     return () => { active = false; controller.abort() }
   }, [selectedId, streams])
@@ -137,7 +138,7 @@ export function Watch(props: WatchProps) {
   }
   const refreshHealth = async () => {
     if (!source || healthControllerRef.current && !healthControllerRef.current.signal.aborted) return
-    const controller = new AbortController()
+    const controller = createSafeAbortController()
     healthControllerRef.current = controller
     setChecking(true)
     try {

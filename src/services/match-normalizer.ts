@@ -1,4 +1,5 @@
 import type { Match, MatchStatus, Sport, Team } from '../types'
+import { createRecordFromEntries } from './runtime-compat'
 import { isIsoTimestamp, isMatchRecord } from './match-schema'
 
 const statuses: Record<string, MatchStatus> = {
@@ -71,7 +72,7 @@ const normalizeExternalIds = (value: unknown): Record<string, string> | undefine
   const entries = Object.entries(externalIds)
     .map(([key, item]) => [key.trim(), cleanString(item)] as const)
     .filter((entry): entry is readonly [string, string] => Boolean(entry[0] && entry[1]))
-  return entries.length ? Object.fromEntries(entries) : undefined
+  return entries.length ? createRecordFromEntries(entries) : undefined
 }
 
 export const normalizeMatch = (value: unknown, providerId?: string): Match | null => {
