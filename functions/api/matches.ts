@@ -1,3 +1,4 @@
+const API_FOOTBALL_ORIGIN = 'https://v3.football.api-sports.io'
 const API_FOOTBALL_FIXTURES_URL = 'https://v3.football.api-sports.io/fixtures'
 const DEFAULT_LEAGUE_ID = '39'
 const DEFAULT_SEASON = '2026'
@@ -89,14 +90,23 @@ type MatchDiagnostics = {
   leagueId: string
   season: string
   keyPresent: boolean
+  keyLength: number
+  keyHasLeadingOrTrailingWhitespace: boolean
+  keyHasControlCharacters: boolean
   cacheHit: boolean
   upstreamStatus: number | null
   upstreamOk: boolean | null
   upstreamRequestDurationMs: number | null
   timeout: boolean
   abort: boolean
-  errorName: DiagnosticErrorCode | null
+  upstreamUrlValid: boolean
+  upstreamOrigin: string | null
+  errorName: string | null
   errorCode: DiagnosticErrorCode | null
+  safeErrorMessage: string | null
+  hasCause: boolean
+  causeName: string | null
+  causeCode: string | null
   invalidJson: boolean
   upstreamErrorsPresent: boolean
   responseIsArray: boolean | null
@@ -159,29 +169,110 @@ const diagnosticConfigValue = (
   return pattern.test(normalized) ? normalized : 'invalid'
 }
 
-const createDiagnostics = (env: ApiFootballEnv): MatchDiagnostics => ({
-  requestId: createRequestId(),
-  from: null,
-  to: null,
-  leagueId: diagnosticConfigValue(env.API_FOOTBALL_LEAGUE_ID, /^\d{1,10}$/, DEFAULT_LEAGUE_ID),
-  season: diagnosticConfigValue(env.API_FOOTBALL_SEASON, /^\d{4}$/, DEFAULT_SEASON),
-  keyPresent: typeof env.API_FOOTBALL_KEY === 'string' && env.API_FOOTBALL_KEY.trim().length > 0,
-  cacheHit: false,
-  upstreamStatus: null,
-  upstreamOk: null,
-  upstreamRequestDurationMs: null,
-  timeout: false,
-  abort: false,
-  errorName: null,
-  errorCode: null,
-  invalidJson: false,
-  upstreamErrorsPresent: false,
-  responseIsArray: null,
-  responseCount: null,
-  validFixtureCount: null,
-  bodyTooLarge: false,
-  responseStatus: null,
-})
+const MAX_SAFE_ERROR_TEXT_LENGTH = 200
+
+const hasAsciiControlCharacters = (value: string): boolean => {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if (code <= 0x1f || code === 0x7f) return true
+  }
+  return false
+}
+
+const replaceAsciiControlCharacters = (value: string): string => {
+  let sanitized = ''
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    sanitized += code <= 0x1f || code === 0x7f ? ' ' : value[index]
+  }
+  return sanitized
+}
+
+const redactDiagnosticText = (value: string, secret: string): string | null => {
+  let sanitized = value
+  if (secret) sanitized = sanitized.split(secret).join('[redacted]')
+  sanitized = sanitized
+    .replace(/https?:\/\/[^\s"'<>]+/gi, '[redacted-url]')
+    .replace(/(?:x-apisports-key|authorization|cookie|set-cookie)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^,;}]+)/gi, '[redacted-header]')
+    .replace(/[?&](?:api[-_]?key|key|token|secret|signature|authorization)=[^&\s]+/gi, '[redacted-query]')
+  sanitized = replaceAsciiControlCharacters(sanitized).slice(0, MAX_SAFE_ERROR_TEXT_LENGTH)
+  return sanitized || null
+}
+
+const readErrorProperty = (value: unknown, property: string): unknown => {
+  if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return undefined
+  try {
+    return (value as Record<string, unknown>)[property]
+  } catch {
+    return undefined
+  }
+}
+
+const safeErrorField = (value: unknown, secret: string): string | null => {
+  if (typeof value === 'string') return redactDiagnosticText(value, secret)
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
+  return null
+}
+
+const readSafeErrorDiagnostics = (
+  error: unknown,
+  secret: string,
+): Pick<MatchDiagnostics, 'errorName' | 'safeErrorMessage' | 'hasCause' | 'causeName' | 'causeCode'> => {
+  const cause = readErrorProperty(error, 'cause')
+  const message = typeof error === 'string' ? error : readErrorProperty(error, 'message')
+  return {
+    errorName: safeErrorField(readErrorProperty(error, 'name'), secret),
+    safeErrorMessage: safeErrorField(message, secret),
+    hasCause: cause !== undefined && cause !== null,
+    causeName: safeErrorField(readErrorProperty(cause, 'name'), secret),
+    causeCode: safeErrorField(readErrorProperty(cause, 'code'), secret),
+  }
+}
+
+const clearSafeErrorDiagnostics = (diagnostics: MatchDiagnostics): void => {
+  diagnostics.errorName = null
+  diagnostics.safeErrorMessage = null
+  diagnostics.hasCause = false
+  diagnostics.causeName = null
+  diagnostics.causeCode = null
+}
+
+const createDiagnostics = (env: ApiFootballEnv): MatchDiagnostics => {
+  const rawKey = typeof env.API_FOOTBALL_KEY === 'string' ? env.API_FOOTBALL_KEY : ''
+  const trimmedKey = rawKey.trim()
+  return {
+    requestId: createRequestId(),
+    from: null,
+    to: null,
+    leagueId: diagnosticConfigValue(env.API_FOOTBALL_LEAGUE_ID, /^\d{1,10}$/, DEFAULT_LEAGUE_ID),
+    season: diagnosticConfigValue(env.API_FOOTBALL_SEASON, /^\d{4}$/, DEFAULT_SEASON),
+    keyPresent: trimmedKey.length > 0,
+    keyLength: rawKey.length,
+    keyHasLeadingOrTrailingWhitespace: rawKey !== trimmedKey,
+    keyHasControlCharacters: hasAsciiControlCharacters(rawKey),
+    cacheHit: false,
+    upstreamStatus: null,
+    upstreamOk: null,
+    upstreamRequestDurationMs: null,
+    timeout: false,
+    abort: false,
+    upstreamUrlValid: false,
+    upstreamOrigin: null,
+    errorName: null,
+    errorCode: null,
+    safeErrorMessage: null,
+    hasCause: false,
+    causeName: null,
+    causeCode: null,
+    invalidJson: false,
+    upstreamErrorsPresent: false,
+    responseIsArray: null,
+    responseCount: null,
+    validFixtureCount: null,
+    bodyTooLarge: false,
+    responseStatus: null,
+  }
+}
 
 const logDiagnostics = (
   level: 'log' | 'error',
@@ -402,6 +493,19 @@ export const buildApiFootballFixturesUrl = (
   return url.toString()
 }
 
+const inspectUpstreamUrl = (value: string): Pick<MatchDiagnostics, 'upstreamUrlValid' | 'upstreamOrigin'> => {
+  try {
+    const url = new URL(value)
+    const origin = url.origin === API_FOOTBALL_ORIGIN ? url.origin : null
+    return {
+      upstreamUrlValid: origin !== null && url.protocol === 'https:' && url.pathname === '/fixtures',
+      upstreamOrigin: origin,
+    }
+  } catch {
+    return { upstreamUrlValid: false, upstreamOrigin: null }
+  }
+}
+
 const securityHeaders = (): Headers => {
   const headers = new Headers()
   headers.set('Content-Type', 'application/json; charset=utf-8')
@@ -522,11 +626,12 @@ export const handleMatchesRequest = async (
         logDiagnostics('log', 'CACHE_HIT', diagnostics)
         return responseWithCacheStatus(cached, 'HIT')
       }
-    } catch {
-      diagnostics.errorName = 'CACHE_FAILED'
+    } catch (error: unknown) {
+      Object.assign(diagnostics, readSafeErrorDiagnostics(error, config.key))
+      if (diagnostics.errorName === null) diagnostics.errorName = 'CACHE_FAILED'
       diagnostics.errorCode = 'CACHE_FAILED'
       logDiagnostics('error', 'CACHE_READ_FAILED', diagnostics)
-      diagnostics.errorName = null
+      clearSafeErrorDiagnostics(diagnostics)
       diagnostics.errorCode = null
     }
   }
@@ -546,8 +651,10 @@ export const handleMatchesRequest = async (
   let raw: unknown | null
   const upstreamStartedAt = Date.now()
   try {
+    const upstreamUrl = buildApiFootballFixturesUrl(dateRange.value, config.leagueId, config.season)
+    Object.assign(diagnostics, inspectUpstreamUrl(upstreamUrl))
     upstreamResponse = await dependencies.fetch(
-      buildApiFootballFixturesUrl(dateRange.value, config.leagueId, config.season),
+      upstreamUrl,
       {
         method: 'GET',
         headers: {
@@ -578,9 +685,12 @@ export const handleMatchesRequest = async (
     diagnostics.invalidJson = upstreamJson.invalidJson
     diagnostics.bodyTooLarge = upstreamJson.bodyTooLarge
     raw = upstreamJson.value
-  } catch {
+  } catch (error: unknown) {
     const errorCode = timedOut ? 'UPSTREAM_TIMEOUT' : controller.signal.aborted ? 'ABORTED' : 'FETCH_FAILED'
-    diagnostics.errorName = errorCode === 'UPSTREAM_TIMEOUT' ? 'ABORTED' : errorCode
+    Object.assign(diagnostics, readSafeErrorDiagnostics(error, config.key))
+    if (diagnostics.errorName === null) {
+      diagnostics.errorName = errorCode === 'UPSTREAM_TIMEOUT' ? 'ABORTED' : errorCode
+    }
     diagnostics.errorCode = errorCode
     diagnostics.responseStatus = timedOut ? 504 : 502
     completeUpstreamDiagnostics(diagnostics, controller, upstreamStartedAt, timedOut)
@@ -623,10 +733,12 @@ export const handleMatchesRequest = async (
   diagnostics.responseStatus = 200
 
   if (dependencies.cache) {
-    const cacheWrite = dependencies.cache.put(cacheKey, response.clone()).catch(() => {
+    const cacheWrite = dependencies.cache.put(cacheKey, response.clone()).catch((error: unknown) => {
+      const safeError = readSafeErrorDiagnostics(error, config.key)
       logDiagnostics('error', 'CACHE_WRITE_FAILED', {
         ...diagnostics,
-        errorName: 'CACHE_FAILED',
+        ...safeError,
+        errorName: safeError.errorName ?? 'CACHE_FAILED',
         errorCode: 'CACHE_FAILED',
       })
       return undefined
