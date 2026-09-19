@@ -154,5 +154,50 @@ button { cursor: pointer; }
 .fw-tip { display: flex; gap: 8px; padding: 14px 15px; border-top: 1px solid #2d373f; color: #78868e; font-size: 10px; line-height: 1.6; }
 .fw-tip i { display: grid; flex: none; width: 14px; height: 14px; border: 1px solid #65727a; border-radius: 50%; place-items: center; font-style: normal; }
 .fw-source-refresh { width: calc(100% - 30px); margin: 0 15px 14px; }
+.fw-shell { overflow-wrap: anywhere; }
+.fw-shell :is(button, input, select, a):focus-visible { outline: 2px solid var(--fw-accent); outline-offset: 3px; }
+.fw-topbar-inner > *, .fw-heading > *, .fw-player-layout > *, .fw-card-inner > *, .fw-source-list button > span { min-width: 0; }
+.fw-heading-actions { flex-wrap: wrap; }
+.fw-time small { color: var(--fw-muted); font-size: 10px; }
+.fw-time time { font-variant-numeric: tabular-nums; }
+.fw-status.upcoming { color: #8fd8e7; }
+.fw-status.suspended, .fw-status.postponed { color: #efce78; }
+.fw-status.cancelled { color: #f39a9a; }
+.fw-card.suspended, .fw-card.postponed { border-left: 3px solid #efce78; }
+.fw-card.cancelled { border-left: 3px solid #f39a9a; }
+.fw-league { flex-wrap: wrap; }
+.fw-card-meta span { color: var(--fw-muted); }
+.fw-watch-head > div { min-width: 0; width: 100%; }
+.fw-watch-head h1 { overflow-wrap: anywhere; }
+.fw-watch-favorites button { max-width: 100%; min-height: 32px; padding: 6px 8px; }
+.fw-player { min-height: 0; width: 100%; }
+.fw-player-center { padding: 10px 0; }
+.fw-player-center strong { line-height: 1.5; }
+.fw-player-note { flex-wrap: wrap; }
+.fw-player-note p { flex: 1; min-width: 120px; margin: 0; line-height: 1.6; }
+.fw-player-note button { flex: none; width: 32px; height: 32px; margin-left: 0; }
+.fw-source-state { padding: 0 16px; color: #acbfc5; font-size: 12px; line-height: 1.6; }
+.fw-source-list > button > i { flex: none; }
+.fw-source-list button em { flex: none; max-width: 56px; }
+.fw-source-list button small { line-height: 1.6; }
+.fw-shell button:disabled { cursor: not-allowed; opacity: .6; }
+.fw-score { font-variant-numeric: tabular-nums; }
+@media (min-width: 641px) and (max-width: 900px) {
+  .fw-topbar-inner { height: auto; flex-wrap: wrap; padding-top: 12px; padding-bottom: 12px; gap: 12px; }
+  .fw-topbar nav { height: 32px; margin-left: auto; }
+  .fw-actions { width: 100%; }
+  .fw-search { flex: 1; }
+}
 @media (max-width: 900px) { .fw-topbar-inner { gap: 20px; padding: 0 18px; } .fw-topbar nav { gap: 18px; } .fw-main { padding-right: 18px; padding-left: 18px; } .fw-card-inner { grid-template-columns: 76px minmax(0, 1fr) 32px 92px; gap: 12px; } .fw-card-meta { display: none; } .fw-player-layout { grid-template-columns: 1fr; } .fw-footer { padding-right: 18px; padding-left: 18px; } }
 @media (max-width: 640px) { .fw-topbar-inner { height: auto; min-height: 64px; flex-wrap: wrap; gap: 8px 14px; padding-top: 10px; padding-bottom: 10px; } .fw-topbar nav { order: 3; width: 100%; height: 30px; justify-content: space-between; gap: 0; } .fw-nav.active::after { bottom: 0; } .fw-actions { order: 2; width: 100%; margin-left: 0; } .fw-search { flex: 1; width: auto; min-width: 0; } .fw-search kbd { display: none; } .fw-hero { min-height: 205px; padding: 42px 0 35px; } .fw-date { display: none; } .fw-hero h1 { font-size: 31px; } .fw-heading { align-items: start; } .fw-heading h2 { font-size: 21px; } .fw-heading-actions > span { display: none; } .fw-heading-actions select { max-width: 145px; } .fw-days { gap: 3px; overflow-x: auto; } .fw-days > button, .fw-custom-date { width: 73px; flex: none; } .fw-card-inner { grid-template-columns: 58px minmax(0, 1fr) 30px; gap: 8px 10px; padding: 13px 11px; } .fw-card .fw-watch-btn { grid-column: 2; justify-self: start; min-width: 0; height: 29px; padding: 0 9px; } .fw-team-row { gap: 6px; font-size: 12px; overflow: hidden; } .fw-team-row > b { max-width: 88px; min-width: 0; overflow: hidden; text-overflow: ellipsis; } .fw-league small { display: none; } .fw-time b { font-size: 16px; } .fw-watch-mode { padding-top: 24px; } .fw-watch-head { display: block; margin-top: 25px; } .fw-watch-head h1 { font-size: 23px; line-height: 1.35; } .fw-player { min-height: 220px; } .fw-player-note { align-items: start; } .fw-footer { display: grid; gap: 4px; } }
+@media (max-width: 640px) {
+  .fw-heading { flex-wrap: wrap; }
+  .fw-heading-actions { width: 100%; justify-content: space-between; }
+  .fw-heading-actions select { max-width: calc(100% - 60px); flex: 1; }
+  .fw-team-row { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); white-space: normal; }
+  .fw-team-row .fw-badge { display: none; }
+  .fw-team-row > b { max-width: none; overflow: visible; overflow-wrap: anywhere; }
+  .fw-player { min-height: 180px; }
+  .fw-custom-date { width: 138px; }
+  .fw-recent-list button { max-width: 90%; white-space: normal; }
+}

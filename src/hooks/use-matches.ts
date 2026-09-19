@@ -13,6 +13,9 @@ export type MatchesState = {
   expiresAt: string | null
   stale: boolean
   fallback: boolean
+  refreshing: boolean
+  backgroundRefreshing: boolean
+  cacheHit: boolean
 }
 
 const initialState: MatchesState = {
@@ -25,6 +28,9 @@ const initialState: MatchesState = {
   expiresAt: null,
   stale: false,
   fallback: false,
+  refreshing: false,
+  backgroundRefreshing: false,
+  cacheHit: false,
 }
 
 const stateFromSnapshot = (snapshot: MatchSnapshot): MatchesState => {
@@ -39,6 +45,9 @@ const stateFromSnapshot = (snapshot: MatchSnapshot): MatchesState => {
     expiresAt: snapshot.metadata.expiresAt,
     stale: snapshot.metadata.stale,
     fallback: snapshot.metadata.fallback,
+    refreshing: false,
+    backgroundRefreshing: false,
+    cacheHit: false,
   }
 }
 
@@ -50,17 +59,17 @@ export const useMatches = () => {
   const requestIdRef = useRef(0)
 
   const refresh = useCallback(async () => {
-    controllerRef.current?.abort()
+    if (controllerRef.current) return
     const controller = new AbortController()
     controllerRef.current = controller
     const requestId = ++requestIdRef.current
-    setState((current) => ({ ...current, loading: true, error: null }))
+    setState((current) => ({ ...current, refreshing: true }))
     try {
       const snapshot = await getMatchSnapshot({ forceRefresh: true, signal: controller.signal })
       if (requestId === requestIdRef.current && !controller.signal.aborted) setState(stateFromSnapshot(snapshot))
     } catch (error) {
       if (!isAbortError(error) && requestId === requestIdRef.current) {
-        setState((current) => ({ ...current, loading: false, error: '赛事数据加载失败' }))
+        setState((current) => ({ ...current, loading: false, refreshing: false, error: '赛事数据加载失败' }))
       }
     } finally {
       if (controllerRef.current === controller) controllerRef.current = null
@@ -72,18 +81,21 @@ export const useMatches = () => {
     controllerRef.current = controller
     const requestId = ++requestIdRef.current
     const load = async () => {
+      const startedAt = Date.now()
       try {
         const snapshot = await getMatchSnapshot({ signal: controller.signal })
         if (requestId !== requestIdRef.current || controller.signal.aborted) return
-        setState(stateFromSnapshot(snapshot))
-        if (snapshot.metadata.stale && !snapshot.metadata.fallback) {
+        setState({ ...stateFromSnapshot(snapshot), cacheHit: Date.parse(snapshot.metadata.fetchedAt ?? '') < startedAt, backgroundRefreshing: snapshot.metadata.stale })
+        if (snapshot.metadata.stale) {
           const refreshed = await getMatchSnapshot({ forceRefresh: true, signal: controller.signal })
           if (requestId === requestIdRef.current && !controller.signal.aborted) setState(stateFromSnapshot(refreshed))
         }
       } catch (error) {
         if (!isAbortError(error) && requestId === requestIdRef.current) {
-          setState((current) => ({ ...current, loading: false, error: '赛事数据加载失败' }))
+          setState((current) => ({ ...current, loading: false, backgroundRefreshing: false, error: '赛事数据加载失败' }))
         }
+      } finally {
+        if (controllerRef.current === controller) controllerRef.current = null
       }
     }
     void load()

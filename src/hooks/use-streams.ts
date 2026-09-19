@@ -1,96 +1,84 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { getStreamQueryResultForMatch } from '../services/stream-service'
-import type { StreamQueryStatus } from '../services/stream-query-service'
-import type { StreamProviderQueryResult } from '../stream-providers/types'
+import type { StreamQueryResult } from '../services/stream-query-service'
+import { streamMatchIdentity } from '../services/match-stream-resolver'
 import type { Match, Stream } from '../types'
 
-type StreamState = {
-  matchId: string | null
-  data: Stream[]
-  loading: boolean
-  error: string | null
-  status: StreamQueryStatus
-  stale: boolean
-  fallbackActive: boolean
-  providerResults: StreamProviderQueryResult[]
-}
-
-const initialState: StreamState = {
-  matchId: null,
-  data: [],
-  loading: false,
-  error: null,
-  status: 'success-empty',
-  stale: false,
-  fallbackActive: false,
-  providerResults: [],
-}
-
+const EMPTY_STREAMS: Stream[] = []
+type StreamState = StreamQueryResult & { key: string; refreshing: boolean; cacheHit: boolean }
 export const useStreams = (match: Match | null) => {
-  const matchId = match?.id ?? null
-  const [state, setState] = useState<StreamState>(initialState)
-  const requestIdRef = useRef(0)
+  const key = match ? streamMatchIdentity(match) : ''
+  const [state, setState] = useState<StreamState | null>(null)
+  const matchRef = useRef(match)
   const controllerRef = useRef<AbortController | null>(null)
+  const requestIdRef = useRef(0)
+
+  useEffect(() => { matchRef.current = match }, [match])
 
   const load = useCallback(async (forceRefresh: boolean) => {
-    if (!matchId) return
-    const requestId = ++requestIdRef.current
-    const requestMatchId = matchId
-    controllerRef.current?.abort()
+    const currentMatch = matchRef.current
+    if (!currentMatch || !key || controllerRef.current) return
     const controller = new AbortController()
     controllerRef.current = controller
-    setState((current) => ({ ...current, matchId: requestMatchId, loading: true, error: null }))
+    const requestId = ++requestIdRef.current
+    const startedAt = Date.now()
+    const current = () => !controller.signal.aborted && requestId === requestIdRef.current
+    const publish = (result: StreamQueryResult, refreshing: boolean, cacheHit: boolean) => setState((previous) => ({
+      ...result,
+      ...(result.status === 'failure' && previous?.key === key && previous.data.length ? { data: previous.data, stale: true } : {}),
+      key, refreshing, cacheHit,
+    }))
     try {
-      const result = await getStreamQueryResultForMatch(match ?? requestMatchId, { forceRefresh, signal: controller.signal })
-      if (controller.signal.aborted || requestId !== requestIdRef.current) return
-      setState({
-        matchId: requestMatchId,
-        data: result.data,
-        loading: false,
-        error: result.error,
-        status: result.status,
-        stale: result.stale,
-        fallbackActive: result.fallbackActive,
-        providerResults: result.providerResults,
-      })
-    } catch (error: unknown) {
-      if (controller.signal.aborted || requestId !== requestIdRef.current) return
-      setState((current) => ({
-        ...current,
-        matchId: requestMatchId,
-        loading: false,
-        error: error instanceof Error ? error.message : '直播源加载失败',
-        status: 'failure',
-        stale: false,
-        fallbackActive: false,
+      let result = await getStreamQueryResultForMatch(currentMatch, { forceRefresh, signal: controller.signal })
+      if (!current()) return
+      publish(result, result.stale, !forceRefresh && Date.parse(result.fetchedAt) < startedAt)
+      if (result.stale) {
+        // Join the service's existing SWR request and publish its result.
+        result = await getStreamQueryResultForMatch(currentMatch, { forceRefresh: true, signal: controller.signal })
+        if (current()) publish(result, false, false)
+      }
+    } catch {
+      if (!current()) return
+      setState((previous) => ({
+        data: previous?.key === key ? previous.data : [],
+        providerResults: previous?.key === key ? previous.providerResults : [],
+        fetchedAt: previous?.key === key ? previous.fetchedAt : new Date().toISOString(),
+        key, status: 'failure', error: '直播源查询失败，请稍后重试',
+        stale: previous?.key === key && previous.data.length > 0,
+        fallbackActive: false, refreshing: false, cacheHit: false,
       }))
+    } finally {
+      if (controllerRef.current === controller) controllerRef.current = null
     }
-  }, [match, matchId])
+  }, [key])
 
-  const refresh = useCallback(() => { void load(true) }, [load])
+  const refresh = useCallback(() => {
+    if (!key || controllerRef.current) return
+    setState((previous) => previous?.key === key ? { ...previous, refreshing: true } : previous)
+    void load(true)
+  }, [key, load])
 
   useEffect(() => {
-    if (!matchId) {
-      requestIdRef.current += 1
-      controllerRef.current?.abort()
-      return
-    }
     void load(false)
     return () => {
       requestIdRef.current += 1
       controllerRef.current?.abort()
+      controllerRef.current = null
     }
-  }, [load, matchId])
+  }, [load])
 
-  const isCurrentMatch = state.matchId === matchId
+  const current = state?.key === key ? state : null
+  const loading = Boolean(key) && !current
   return {
-    data: isCurrentMatch ? state.data : [],
-    loading: Boolean(matchId) && (state.loading || !isCurrentMatch),
-    error: isCurrentMatch ? state.error : null,
-    status: isCurrentMatch ? state.status : 'success-empty' as const,
-    stale: isCurrentMatch && state.stale,
-    fallbackActive: isCurrentMatch && state.fallbackActive,
-    providerResults: isCurrentMatch ? state.providerResults : [],
+    data: current?.data ?? EMPTY_STREAMS,
+    loading,
+    refreshing: current?.refreshing ?? false,
+    error: current?.error ?? null,
+    status: loading ? 'loading' as const : current?.status ?? 'success-empty' as const,
+    stale: current?.stale ?? false,
+    cacheHit: current?.cacheHit ?? false,
+    fallbackActive: current?.fallbackActive ?? false,
+    providerResults: current?.providerResults ?? [],
     refresh,
   }
 }

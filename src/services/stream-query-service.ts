@@ -61,7 +61,8 @@ const cloneResult = (value: StreamQueryResult): StreamQueryResult => ({
 
 const throwIfAborted = (signal?: AbortSignal): void => {
   if (signal?.aborted) {
-    const error = signal.reason instanceof Error ? signal.reason : new Error('Request aborted')
+    if (signal.reason instanceof Error && signal.reason.name === 'AbortError') throw signal.reason
+    const error = new Error('Request aborted')
     error.name = 'AbortError'
     throw error
   }
@@ -176,7 +177,7 @@ export const createStreamQueryService = (options: StreamQueryServiceOptions = {}
   const defaultTimeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const maxRetries = Math.max(0, options.maxRetries ?? DEFAULT_MAX_RETRIES)
   const cache = new Map<string, CacheEntry>()
-  const inFlight = new Map<string, Promise<StreamQueryResult>>()
+  const inFlight = new Map<string, { promise: Promise<StreamQueryResult>; signal?: AbortSignal }>()
   const circuits = new Map<string, ProviderCircuit>()
 
   const runProvider = async (provider: StreamProviderAdapter, request: StreamProviderQuery): Promise<StreamProviderQueryResult> => {
@@ -196,10 +197,7 @@ export const createStreamQueryService = (options: StreamQueryServiceOptions = {}
         controller.abort(new Error('Stream Provider request timed out'))
       }, timeoutMs)
       try {
-        const response = await Promise.race([
-          queryStreamProvider(provider, { ...request, signal: controller.signal }),
-          new Promise<StreamProviderQueryResult>((_, reject) => setTimeout(() => reject(new ProviderAttemptError('Stream Provider request timed out', true)), timeoutMs)),
-        ])
+        const response = await raceWithAbort(queryStreamProvider(provider, { ...request, signal: controller.signal }), controller.signal)
         if (response.status === 'circuit-open') return response
         if (response.status === 'failure' || response.status === 'timeout') throw new ProviderAttemptError(response.error ?? 'Stream Provider query failed', response.status === 'timeout')
         circuits.delete(providerId)
@@ -256,15 +254,16 @@ export const createStreamQueryService = (options: StreamQueryServiceOptions = {}
 
   const startRefresh = (match: Match, key: string, signal?: AbortSignal): Promise<StreamQueryResult> => {
     const existing = inFlight.get(key)
-    if (existing) return existing
+    if (existing && !existing.signal?.aborted) return existing.promise
     const promise = refresh(match, key, signal).finally(() => {
-      if (inFlight.get(key) === promise) inFlight.delete(key)
+      if (inFlight.get(key)?.promise === promise) inFlight.delete(key)
     })
-    inFlight.set(key, promise)
+    inFlight.set(key, { promise, signal })
     return promise
   }
 
   const query = async (match: Match, queryOptions: StreamQueryOptions = {}): Promise<StreamQueryResult> => {
+    throwIfAborted(queryOptions.signal)
     const key = streamMatchIdentity(match)
     const cached = cache.get(key)
     const timestamp = now()
