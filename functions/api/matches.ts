@@ -1,5 +1,8 @@
-const API_FOOTBALL_ORIGIN = 'https://v3.football.api-sports.io'
-const API_FOOTBALL_FIXTURES_URL = 'https://v3.football.api-sports.io/fixtures'
+import { executeApiSportsRequest, readApiSportsKey } from './api-sports/base-provider'
+import { apiFootballProvider } from './api-sports/registry'
+import { ApiSportsResponseError, type ApiSportsCache, type ApiSportsSecretEnv } from './api-sports/types'
+
+const API_FOOTBALL_FIXTURES_URL = `${apiFootballProvider.origin}${apiFootballProvider.path ?? ''}`
 const DEFAULT_LEAGUE_ID = '39'
 const DEFAULT_SEASON = '2026'
 const DEFAULT_RANGE_DAYS = 7
@@ -48,8 +51,7 @@ export type ApiFootballMatchesPayload = {
   matches: ApiFootballFixtureDto[]
 }
 
-type ApiFootballEnv = {
-  API_FOOTBALL_KEY?: string
+type ApiFootballEnv = ApiSportsSecretEnv & {
   API_FOOTBALL_LEAGUE_ID?: string
   API_FOOTBALL_SEASON?: string
 }
@@ -60,12 +62,10 @@ type PagesFunctionContext = {
   waitUntil?: (promise: Promise<unknown>) => void
 }
 
-type EdgeCache = Pick<Cache, 'match' | 'put'>
-
 type MatchesFunctionDependencies = {
   fetch: typeof fetch
   now: () => Date
-  cache: EdgeCache | null
+  cache: Pick<Cache, 'match' | 'put'> | null
 }
 
 type DiagnosticErrorCode =
@@ -83,6 +83,7 @@ type DiagnosticErrorCode =
   | 'UPSTREAM_ERRORS'
   | 'INVALID_RESPONSE_SCHEMA'
   | 'RESPONSE_TOO_LARGE'
+  | 'CIRCUIT_OPEN'
 
 type MatchDiagnostics = {
   requestId: string
@@ -117,12 +118,6 @@ type MatchDiagnostics = {
   validFixtureCount: number | null
   bodyTooLarge: boolean
   responseStatus: number | null
-}
-
-type UpstreamJsonResult = {
-  value: unknown | null
-  invalidJson: boolean
-  bodyTooLarge: boolean
 }
 
 type DateRangeResult =
@@ -202,44 +197,6 @@ const redactDiagnosticText = (value: string, secret: string): string | null => {
   return sanitized || null
 }
 
-const readErrorProperty = (value: unknown, property: string): unknown => {
-  if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return undefined
-  try {
-    return (value as Record<string, unknown>)[property]
-  } catch {
-    return undefined
-  }
-}
-
-const safeErrorField = (value: unknown, secret: string): string | null => {
-  if (typeof value === 'string') return redactDiagnosticText(value, secret)
-  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
-  return null
-}
-
-const readSafeErrorDiagnostics = (
-  error: unknown,
-  secret: string,
-): Pick<MatchDiagnostics, 'errorName' | 'safeErrorMessage' | 'hasCause' | 'causeName' | 'causeCode'> => {
-  const cause = readErrorProperty(error, 'cause')
-  const message = typeof error === 'string' ? error : readErrorProperty(error, 'message')
-  return {
-    errorName: safeErrorField(readErrorProperty(error, 'name'), secret),
-    safeErrorMessage: safeErrorField(message, secret),
-    hasCause: cause !== undefined && cause !== null,
-    causeName: safeErrorField(readErrorProperty(cause, 'name'), secret),
-    causeCode: safeErrorField(readErrorProperty(cause, 'code'), secret),
-  }
-}
-
-const clearSafeErrorDiagnostics = (diagnostics: MatchDiagnostics): void => {
-  diagnostics.errorName = null
-  diagnostics.safeErrorMessage = null
-  diagnostics.hasCause = false
-  diagnostics.causeName = null
-  diagnostics.causeCode = null
-}
-
 const createDiagnostics = (env: ApiFootballEnv): MatchDiagnostics => {
   const rawKey = typeof env.API_FOOTBALL_KEY === 'string' ? env.API_FOOTBALL_KEY : ''
   const trimmedKey = rawKey.trim()
@@ -287,17 +244,6 @@ const logDiagnostics = (
   const entry = { service: 'matches', event, ...diagnostics }
   if (level === 'error') console.error(entry)
   else console.log(entry)
-}
-
-const completeUpstreamDiagnostics = (
-  diagnostics: MatchDiagnostics,
-  controller: AbortController,
-  startedAt: number,
-  timedOut: boolean,
-): void => {
-  diagnostics.upstreamRequestDurationMs = Math.max(0, Date.now() - startedAt)
-  diagnostics.timeout = timedOut
-  diagnostics.abort = controller.signal.aborted
 }
 
 const addUtcDays = (dateKey: string, days: number): string => {
@@ -536,7 +482,7 @@ const inspectApiFootballResponse = (raw: unknown, secret: string): Pick<
 }
 
 const resolveConfig = (env: ApiFootballEnv): ApiFootballConfig | null => {
-  const key = typeof env.API_FOOTBALL_KEY === 'string' ? env.API_FOOTBALL_KEY.trim() : ''
+  const key = readApiSportsKey(env)
   const leagueId = typeof env.API_FOOTBALL_LEAGUE_ID === 'string'
     ? env.API_FOOTBALL_LEAGUE_ID.trim()
     : DEFAULT_LEAGUE_ID
@@ -561,19 +507,6 @@ export const buildApiFootballFixturesUrl = (
   url.searchParams.set('season', season)
   url.searchParams.set('timezone', 'UTC')
   return url.toString()
-}
-
-const inspectUpstreamUrl = (value: string): Pick<MatchDiagnostics, 'upstreamUrlValid' | 'upstreamOrigin'> => {
-  try {
-    const url = new URL(value)
-    const origin = url.origin === API_FOOTBALL_ORIGIN ? url.origin : null
-    return {
-      upstreamUrlValid: origin !== null && url.protocol === 'https:' && url.pathname === '/fixtures',
-      upstreamOrigin: origin,
-    }
-  } catch {
-    return { upstreamUrlValid: false, upstreamOrigin: null }
-  }
 }
 
 const securityHeaders = (): Headers => {
@@ -627,8 +560,8 @@ const responseWithCacheStatus = (response: Response, status: 'HIT' | 'MISS'): Re
   })
 }
 
-const runtimeCache = (): EdgeCache | null => {
-  const runtime = globalThis as unknown as { caches?: { default?: EdgeCache } }
+const runtimeCache = (): ApiSportsCache | null => {
+  const runtime = globalThis as unknown as { caches?: { default?: ApiSportsCache } }
   return runtime.caches?.default ?? null
 }
 
@@ -637,24 +570,6 @@ const defaultDependencies = (): MatchesFunctionDependencies => ({
   now: () => new Date(),
   cache: runtimeCache(),
 })
-
-const readUpstreamJson = async (response: Response): Promise<UpstreamJsonResult> => {
-  const contentLength = Number(response.headers.get('Content-Length'))
-  if (Number.isFinite(contentLength) && contentLength > MAX_UPSTREAM_BODY_LENGTH) {
-    return { value: null, invalidJson: false, bodyTooLarge: true }
-  }
-
-  const text = await response.text()
-  if (text.length > MAX_UPSTREAM_BODY_LENGTH) {
-    return { value: null, invalidJson: false, bodyTooLarge: true }
-  }
-
-  try {
-    return { value: JSON.parse(text) as unknown, invalidJson: false, bodyTooLarge: false }
-  } catch {
-    return { value: null, invalidJson: true, bodyTooLarge: false }
-  }
-}
 
 export const handleMatchesRequest = async (
   context: PagesFunctionContext,
@@ -687,147 +602,57 @@ export const handleMatchesRequest = async (
   diagnostics.season = config.season
 
   const cacheKey = buildCacheKey(context.request.url, dateRange.value, config)
-  if (dependencies.cache) {
-    try {
-      const cached = await dependencies.cache.match(cacheKey)
-      if (cached) {
-        diagnostics.cacheHit = true
-        diagnostics.responseStatus = cached.status
-        logDiagnostics('log', 'CACHE_HIT', diagnostics)
-        return responseWithCacheStatus(cached, 'HIT')
-      }
-    } catch (error: unknown) {
-      Object.assign(diagnostics, readSafeErrorDiagnostics(error, config.key))
-      if (diagnostics.errorName === null) diagnostics.errorName = 'CACHE_FAILED'
-      diagnostics.errorCode = 'CACHE_FAILED'
-      logDiagnostics('error', 'CACHE_READ_FAILED', diagnostics)
-      clearSafeErrorDiagnostics(diagnostics)
-      diagnostics.errorCode = null
-    }
-  }
 
-  const controller = new AbortController()
-  let timedOut = false
-  const abortForClient = () => controller.abort()
-  if (context.request.signal.aborted) controller.abort()
-  else context.request.signal.addEventListener('abort', abortForClient, { once: true })
-
-  const timeoutId = setTimeout(() => {
-    timedOut = true
-    controller.abort()
-  }, UPSTREAM_TIMEOUT_MS)
-
-  let upstreamResponse: Response
-  let raw: unknown | null
-  const upstreamStartedAt = Date.now()
-  try {
-    const upstreamUrl = buildApiFootballFixturesUrl(dateRange.value, config.leagueId, config.season)
-    Object.assign(diagnostics, inspectUpstreamUrl(upstreamUrl))
-    upstreamResponse = await dependencies.fetch(
-      upstreamUrl,
-      {
-        method: 'GET',
-        headers: {
-          Accept: 'application/json',
-          'x-apisports-key': config.key,
-        },
-        credentials: 'omit',
-        redirect: 'manual',
-        referrerPolicy: 'no-referrer',
-        signal: controller.signal,
-      },
-    )
-
-    diagnostics.upstreamStatus = upstreamResponse.status
-    diagnostics.upstreamOk = upstreamResponse.ok
-
-    if (upstreamResponse.status >= 300 && upstreamResponse.status < 400) {
-      diagnostics.errorName = 'UPSTREAM_REDIRECT'
-      diagnostics.errorCode = 'UPSTREAM_REDIRECT'
-      diagnostics.responseStatus = 502
-      completeUpstreamDiagnostics(diagnostics, controller, upstreamStartedAt, timedOut)
-      logDiagnostics('error', 'UPSTREAM_REDIRECT', diagnostics)
-      return errorResponse(502, 'SERVICE_UNAVAILABLE')
-    }
-
-    if (!upstreamResponse.ok) {
-      const status = upstreamResponse.status === 429 ? 429 : upstreamResponse.status >= 500 ? 503 : 424
-      diagnostics.errorName = 'UPSTREAM_NON_2XX'
-      diagnostics.errorCode = 'UPSTREAM_NON_2XX'
-      diagnostics.responseStatus = status
-      completeUpstreamDiagnostics(diagnostics, controller, upstreamStartedAt, timedOut)
-      logDiagnostics('error', 'UPSTREAM_NON_2XX', diagnostics)
-      return errorResponse(status, 'SERVICE_UNAVAILABLE')
-    }
-
-    const upstreamJson = await readUpstreamJson(upstreamResponse)
-    diagnostics.invalidJson = upstreamJson.invalidJson
-    diagnostics.bodyTooLarge = upstreamJson.bodyTooLarge
-    raw = upstreamJson.value
-  } catch (error: unknown) {
-    const errorCode = timedOut ? 'UPSTREAM_TIMEOUT' : controller.signal.aborted ? 'ABORTED' : 'FETCH_FAILED'
-    Object.assign(diagnostics, readSafeErrorDiagnostics(error, config.key))
-    if (diagnostics.errorName === null) {
-      diagnostics.errorName = errorCode === 'UPSTREAM_TIMEOUT' ? 'ABORTED' : errorCode
-    }
-    diagnostics.errorCode = errorCode
-    diagnostics.responseStatus = timedOut ? 504 : 502
-    completeUpstreamDiagnostics(diagnostics, controller, upstreamStartedAt, timedOut)
-    logDiagnostics('error', diagnostics.errorName, diagnostics)
-    return errorResponse(timedOut ? 504 : 502, timedOut ? 'UPSTREAM_TIMEOUT' : 'SERVICE_UNAVAILABLE')
-  } finally {
-    completeUpstreamDiagnostics(diagnostics, controller, upstreamStartedAt, timedOut)
-    clearTimeout(timeoutId)
-    context.request.signal.removeEventListener('abort', abortForClient)
-  }
-
-  const minimized = minimizeApiFootballResponse(raw)
-  Object.assign(diagnostics, inspectApiFootballResponse(raw, config.key))
-  if (!minimized.ok) {
-    const errorCode = diagnostics.bodyTooLarge
-      ? 'RESPONSE_TOO_LARGE'
-      : diagnostics.invalidJson
-        ? 'INVALID_JSON'
-        : diagnostics.upstreamErrorsPresent
+  const upstreamUrl = buildApiFootballFixturesUrl(dateRange.value, config.leagueId, config.season)
+  const requestResult = await executeApiSportsRequest({
+    provider: apiFootballProvider,
+    url: upstreamUrl,
+    cacheKey,
+    key: config.key,
+    requestSignal: context.request.signal,
+    dependencies,
+    waitUntil: context.waitUntil,
+    timeoutMs: UPSTREAM_TIMEOUT_MS,
+    maxRetries: 2,
+    maxBodyLength: MAX_UPSTREAM_BODY_LENGTH,
+    log: (level, event, baseDiagnostics) => {
+      Object.assign(diagnostics, baseDiagnostics)
+      logDiagnostics(level, event, diagnostics)
+    },
+    buildResponse: (raw, fetchedAtDate, baseDiagnostics) => {
+      Object.assign(baseDiagnostics, inspectApiFootballResponse(raw, config.key))
+      const minimized = minimizeApiFootballResponse(raw)
+      if (!minimized.ok) {
+        const errorCode = baseDiagnostics.upstreamErrorsPresent
           ? 'UPSTREAM_ERRORS'
           : 'INVALID_RESPONSE_SCHEMA'
-    diagnostics.errorName = errorCode
-    diagnostics.errorCode = errorCode
-    diagnostics.responseStatus = 502
-    logDiagnostics('error', errorCode, diagnostics)
-    return errorResponse(502, 'SERVICE_UNAVAILABLE')
+        baseDiagnostics.errorName = errorCode
+        baseDiagnostics.errorCode = errorCode
+        throw new ApiSportsResponseError(errorCode)
+      }
+
+      const fetchedAt = fetchedAtDate.toISOString()
+      const expiresAt = new Date(fetchedAtDate.getTime() + EDGE_CACHE_TTL_SECONDS * 1_000).toISOString()
+      const payload: ApiFootballMatchesPayload = {
+        provider: 'api-football',
+        fetchedAt,
+        sourceUpdatedAt: null,
+        expiresAt,
+        matches: minimized.matches,
+      }
+      return jsonResponse(payload, 200, true)
+    },
+  })
+
+  Object.assign(diagnostics, requestResult.diagnostics)
+  if (!requestResult.ok) {
+    const publicCode = requestResult.code === 'UPSTREAM_TIMEOUT' ? 'UPSTREAM_TIMEOUT' : 'SERVICE_UNAVAILABLE'
+    return errorResponse(requestResult.status, publicCode)
   }
 
-  const fetchedAtDate = dependencies.now()
-  const fetchedAt = fetchedAtDate.toISOString()
-  const expiresAt = new Date(fetchedAtDate.getTime() + EDGE_CACHE_TTL_SECONDS * 1_000).toISOString()
-  const payload: ApiFootballMatchesPayload = {
-    provider: 'api-football',
-    fetchedAt,
-    sourceUpdatedAt: null,
-    expiresAt,
-    matches: minimized.matches,
-  }
-  const response = jsonResponse(payload, 200, true)
-  diagnostics.responseStatus = 200
-
-  if (dependencies.cache) {
-    const cacheWrite = dependencies.cache.put(cacheKey, response.clone()).catch((error: unknown) => {
-      const safeError = readSafeErrorDiagnostics(error, config.key)
-      logDiagnostics('error', 'CACHE_WRITE_FAILED', {
-        ...diagnostics,
-        ...safeError,
-        errorName: safeError.errorName ?? 'CACHE_FAILED',
-        errorCode: 'CACHE_FAILED',
-      })
-      return undefined
-    })
-    if (context.waitUntil) context.waitUntil(cacheWrite)
-    else await cacheWrite
-  }
-
-  logDiagnostics('log', 'UPSTREAM_OK', diagnostics)
-  return responseWithCacheStatus(response, 'MISS')
+  diagnostics.responseStatus = requestResult.response.status
+  logDiagnostics('log', requestResult.cacheHit ? 'CACHE_HIT' : 'UPSTREAM_OK', diagnostics)
+  return responseWithCacheStatus(requestResult.response, requestResult.cacheHit ? 'HIT' : 'MISS')
 }
 
 export const onRequestGet = (context: PagesFunctionContext): Promise<Response> => handleMatchesRequest(context)
