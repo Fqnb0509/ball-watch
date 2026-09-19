@@ -17,7 +17,7 @@ type HealthSnapshot = { status: StreamHealth; lastCheckedAt: string; latency: nu
 
 const statusLabels: Record<MatchStatus, string> = { live: '进行中', upcoming: '即将开始', finished: '已结束' }
 const healthLabels: Record<StreamHealth, string> = { online: '在线', offline: '失效', timeout: '超时', unknown: '待检测' }
-const sportOrder: Array<Sport | 'all'> = ['all', 'football', 'basketball', 'tennis', 'esports']
+const sportOrder: Array<Sport | 'all'> = ['all', 'football', 'basketball', 'baseball', 'tennis', 'esports']
 const BEIJING_TIME_ZONE = 'Asia/Shanghai'
 
 function beijingDateParts(value: Date) {
@@ -174,5 +174,5 @@ function EmbedElement({ source, onError }: { source: Stream; onError: (event: Sy
     const frame = frameRef.current
     return () => { frame?.removeAttribute('src') }
   }, [])
-  return <iframe ref={frameRef} className="fw-media" src={source.url} title={source.name} sandbox="allow-scripts allow-same-origin allow-presentation" allow="autoplay; fullscreen; picture-in-picture" referrerPolicy="no-referrer" loading="lazy" onError={onError} />
+  return <iframe ref={frameRef} className="fw-media" src={source.url} title={source.name} sandbox="allow-scripts allow-same-origin allow-presentation" allow="autoplay; fullscreen; picture-in-picture" referrerPolicy="strict-origin-when-cross-origin" loading="lazy" onError={onError} />
 }

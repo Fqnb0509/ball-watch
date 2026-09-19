@@ -1,6 +1,6 @@
 # FIELDWATCH
 
-一个面向个人使用的球赛赛程、收藏与观看页前端。当前版本不接入任何未经授权的直播源，播放器保持 Demo / 待配置状态。
+一个面向个人使用的球赛赛程、收藏与观看页前端。当前版本不接入任何未经授权的直播源，并保留 Demo 回退与一个已核验的官方 YouTube 测试源。
 
 ## 技术栈
 
@@ -44,7 +44,7 @@ pnpm run dev
 当前支持的扩展类型包括 `official`、`youtube`、`external-api` 和 `manual`：
 
 - 官方页面只能作为经过来源白名单校验的“官方观看入口”，不会提取 manifest、绕过登录、地区限制或 DRM。
-- YouTube 只接受经过人工核验的 11 位视频 ID，并要求使用官方 embed 域名；当前配置为空。
+- YouTube 手动配置位于 `src/stream-providers/youtube-provider.ts`，字段包括 `matchId`、`provider: 'youtube'`、`videoId`、`title`、`legalStatus` 和 `enabled`；只有已核验的 11 位官方 Video ID、`legalStatus: 'authorized'` 且启用时才会生成 iframe。省略或留空 `videoId`、填写普通 YouTube 页面 URL 或其他协议都会继续显示“暂无合法直播源”。当前仅配置 Savannah Bananas 官方测试源。
 - HLS、DASH、MP4 直链还需要把经过审核的媒体 origin 加入 `stream-url-policy.ts` 的明确白名单；当前白名单为空。
 - `external-api` 仅保留服务端 provider 边界，API Key 不会读取或暴露在前端。
 

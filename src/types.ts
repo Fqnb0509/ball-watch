@@ -1,4 +1,4 @@
-export type Sport = 'football' | 'basketball' | 'tennis' | 'esports'
+export type Sport = 'football' | 'basketball' | 'baseball' | 'tennis' | 'esports'
 export type MatchStatus = 'upcoming' | 'live' | 'finished'
 export type StreamType = 'hls' | 'dash' | 'mp4' | 'embed'
 export type StreamProvider = 'demo' | 'official' | 'youtube' | 'external-api' | 'manual'
