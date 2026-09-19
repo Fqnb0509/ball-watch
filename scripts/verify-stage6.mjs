@@ -9,6 +9,8 @@ const originalAbortController = globalThis.AbortController
 const originalFetch = globalThis.fetch
 const originalLocalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
 const originalDateTimeFormat = Intl.DateTimeFormat
+const originalWindow = globalThis.window
+const originalDocument = globalThis.document
 
 const footballDataEnvelope = {
   provider: 'football-data',
@@ -39,8 +41,61 @@ const vite = await createServer({
 
 try {
   const compat = await vite.ssrLoadModule('/src/services/runtime-compat.ts')
+  const bootstrapModule = await vite.ssrLoadModule('/src/bootstrap-diagnostic.ts')
   const matchesSource = await readFile('src/hooks/use-matches.ts', 'utf8')
   const streamsSource = await readFile('src/hooks/use-streams.ts', 'utf8')
+
+  const createFakeElement = (tagName) => {
+    let text = ''
+    const element = {
+      tagName,
+      id: '',
+      value: '',
+      style: {},
+      children: [],
+      listeners: {},
+      appendChild(child) { this.children.push(child); return child },
+      removeChild(child) { this.children = this.children.filter((item) => item !== child) },
+      remove() { if (this.parent) this.parent.removeChild(this) },
+      setAttribute(name, value) { this[name] = value },
+      addEventListener(name, listener) { this.listeners[name] = listener },
+      select() {},
+      click() { this.listeners.click?.() },
+    }
+    Object.defineProperty(element, 'textContent', {
+      get: () => text || element.children.map((child) => child.textContent ?? '').join(''),
+      set: (value) => { text = String(value); element.children = [] },
+    })
+    return element
+  }
+  const textContent = (element) => element.textContent
+  const createFakeDom = () => {
+    const root = createFakeElement('div')
+    root.id = 'root'
+    const body = createFakeElement('body')
+    body.appendChild(root)
+    const document = {
+      body,
+      getElementById: (id) => id === 'root' ? root : null,
+      createElement: createFakeElement,
+      createTextNode: (value) => { const node = createFakeElement('text'); node.textContent = value; return node },
+      execCommand: () => true,
+    }
+    const window = { location: { pathname: '/' }, navigator: { userAgent: 'Stage6 Safari' }, onerror: null, onunhandledrejection: null }
+    return { root, document, window }
+  }
+  const useFakeDom = () => {
+    const fake = createFakeDom()
+    globalThis.document = fake.document
+    globalThis.window = fake.window
+    return fake
+  }
+  const restoreDom = () => {
+    if (originalDocument === undefined) delete globalThis.document
+    else globalThis.document = originalDocument
+    if (originalWindow === undefined) delete globalThis.window
+    else globalThis.window = originalWindow
+  }
 
   test('AbortController support uses native cancellation when available', () => {
     assert.equal(compat.supportsAbortController(), typeof originalAbortController === 'function')
@@ -95,6 +150,48 @@ try {
     const matchesData = await vite.ssrLoadModule('/src/matches-data.ts?stage6-missing-format-to-parts')
     assert.ok(matchesData.matches.length > 0)
     Intl.DateTimeFormat = NativeDateTimeFormat
+  })
+
+  test('Bootstrap diagnostics stay hidden after a normal mount', () => {
+    const fake = useFakeDom()
+    const diagnostic = bootstrapModule.createBootstrapDiagnostic()
+    diagnostic.install()
+    diagnostic.markCreateRootExecuted()
+    diagnostic.markFieldWatchEntered()
+    diagnostic.markReactMounted()
+    fake.window.onerror('ignored', '', 0, 0, new Error('ignored'))
+    assert.equal(textContent(fake.root), '')
+    restoreDom()
+  })
+
+  test('Bootstrap diagnostics render when createRoot throws', () => {
+    const fake = useFakeDom()
+    const diagnostic = bootstrapModule.createBootstrapDiagnostic()
+    diagnostic.install()
+    diagnostic.markCreateRootExecuted()
+    diagnostic.capture(new Error('createRoot failed'), 'CreateRootError')
+    assert.match(textContent(fake.root), /FIELDWATCH 启动失败/)
+    assert.match(textContent(fake.root), /createRoot failed/)
+    assert.equal(fake.root.children[0]['data-bootstrap-diagnostic'], 'true')
+    restoreDom()
+  })
+
+  test('Bootstrap diagnostics capture window errors and unhandled rejections safely', () => {
+    const fake = useFakeDom()
+    const diagnostic = bootstrapModule.createBootstrapDiagnostic()
+    diagnostic.install()
+    fake.window.onerror('window exploded', '', 0, 0, new Error('window exploded'))
+    assert.match(textContent(fake.root), /window exploded/)
+    assert.equal(diagnostic.snapshot().errorName, 'Error')
+    restoreDom()
+
+    const second = useFakeDom()
+    const rejectionDiagnostic = bootstrapModule.createBootstrapDiagnostic()
+    rejectionDiagnostic.install()
+    second.window.onunhandledrejection({ reason: new Error('promise exploded') })
+    assert.match(textContent(second.root), /promise exploded/)
+    assert.equal(rejectionDiagnostic.snapshot().errorName, 'Error')
+    restoreDom()
   })
 
   test('Production bundle targets old Safari syntax compatibility', async () => {
@@ -170,7 +267,7 @@ try {
       failures += 1
       console.error(`not ok - ${name}`)
       console.error(error)
-    } finally {
+  } finally {
       globalThis.AbortController = originalAbortController
       globalThis.fetch = originalFetch
       Intl.DateTimeFormat = originalDateTimeFormat
@@ -183,6 +280,10 @@ try {
   globalThis.fetch = originalFetch
   Intl.DateTimeFormat = originalDateTimeFormat
   if (originalLocalStorage) Object.defineProperty(globalThis, 'localStorage', originalLocalStorage)
-  else delete globalThis.localStorage
-  await vite.close()
-}
+    else delete globalThis.localStorage
+    if (originalDocument === undefined) delete globalThis.document
+    else globalThis.document = originalDocument
+    if (originalWindow === undefined) delete globalThis.window
+    else globalThis.window = originalWindow
+    await vite.close()
+  }
