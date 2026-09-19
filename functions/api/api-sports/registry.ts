@@ -6,6 +6,17 @@ export const apiFootballProvider: ApiSportsProviderDefinition = {
   origin: 'https://v3.football.api-sports.io',
   path: '/fixtures',
   keyEnv: 'API_FOOTBALL_KEY',
+  authHeader: 'x-apisports-key',
+  enabled: true,
+}
+
+export const footballDataProvider: ApiSportsProviderDefinition = {
+  id: 'football-data',
+  sport: 'football',
+  origin: 'https://api.football-data.org',
+  path: '/v4/competitions/PL/matches',
+  keyEnv: 'FOOTBALL_DATA_TOKEN',
+  authHeader: 'X-Auth-Token',
   enabled: true,
 }
 
@@ -15,6 +26,7 @@ export const apiBasketballProvider: ApiSportsProviderDefinition = {
   origin: 'https://v1.basketball.api-sports.io',
   path: null,
   keyEnv: 'API_FOOTBALL_KEY',
+  authHeader: 'x-apisports-key',
   enabled: false,
 }
 
@@ -24,6 +36,7 @@ export const apiBaseballProvider: ApiSportsProviderDefinition = {
   origin: 'https://v1.baseball.api-sports.io',
   path: null,
   keyEnv: 'API_FOOTBALL_KEY',
+  authHeader: 'x-apisports-key',
   enabled: false,
 }
 
@@ -33,6 +46,7 @@ export const apiTennisProvider: ApiSportsProviderDefinition = {
   origin: 'https://v1.tennis.api-sports.io',
   path: null,
   keyEnv: 'API_FOOTBALL_KEY',
+  authHeader: 'x-apisports-key',
   enabled: false,
 }
 

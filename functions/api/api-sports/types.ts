@@ -5,12 +5,14 @@ export type ApiSportsProviderDefinition = {
   readonly sport: ApiSportsSport
   readonly origin: string
   readonly path: string | null
-  readonly keyEnv: 'API_FOOTBALL_KEY'
+  readonly keyEnv: 'API_FOOTBALL_KEY' | 'FOOTBALL_DATA_TOKEN'
+  readonly authHeader: 'x-apisports-key' | 'X-Auth-Token'
   readonly enabled: boolean
 }
 
 export type ApiSportsSecretEnv = {
   API_FOOTBALL_KEY?: string
+  FOOTBALL_DATA_TOKEN?: string
 }
 
 export type ApiSportsCache = Pick<Cache, 'match' | 'put'>
