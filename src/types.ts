@@ -5,6 +5,7 @@ export type StreamProvider = 'demo' | 'official' | 'youtube' | 'external-api' | 
 export type StreamLegalStatus = 'demo' | 'authorized' | 'unverified'
 export type StreamAccess = 'player' | 'official-page'
 export type StreamHealth = 'online' | 'offline' | 'timeout' | 'unknown'
+export type StreamCandidateRole = 'primary' | 'fallback'
 export type Team = { id: string; name: string; shortName?: string; players?: string[] }
 export type Match = {
   id: string
@@ -53,4 +54,6 @@ export type Stream = {
   officialPageUrl: string | null
   eventId: string | null
   access: StreamAccess
+  /** Assigned by the stream query layer; omitted by legacy providers. */
+  role?: 'primary' | 'fallback'
 }

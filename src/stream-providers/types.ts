@@ -1,5 +1,8 @@
 import type { Match, Sport, Stream, StreamAccess, StreamProvider, StreamType } from '../types'
 
+// Compatibility export for legacy providers; the resolver remains the single implementation.
+export { matchesConfiguredEvent } from '../services/match-stream-resolver'
+
 export type StreamCandidateRole = 'primary' | 'fallback'
 
 export type StreamProviderResultStatus = 'success-empty' | 'success-with-candidates' | 'failure' | 'timeout' | 'circuit-open'
