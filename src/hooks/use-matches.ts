@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { getMatchSnapshot } from '../services/match-service'
+import { createSafeAbortController } from '../services/runtime-compat'
 import type { MatchSnapshot } from '../services/match-service'
 import type { Match } from '../types'
 
@@ -55,12 +56,13 @@ const isAbortError = (error: unknown) => error instanceof Error && error.name ==
 
 export const useMatches = () => {
   const [state, setState] = useState<MatchesState>(initialState)
-  const controllerRef = useRef<AbortController | null>(null)
+  const controllerRef = useRef<ReturnType<typeof createSafeAbortController> | null>(null)
   const requestIdRef = useRef(0)
+  const mountedRef = useRef(false)
 
   const refresh = useCallback(async () => {
     if (controllerRef.current) return
-    const controller = new AbortController()
+    const controller = createSafeAbortController()
     controllerRef.current = controller
     const requestId = ++requestIdRef.current
     setState((current) => ({ ...current, refreshing: true }))
@@ -68,8 +70,8 @@ export const useMatches = () => {
       const snapshot = await getMatchSnapshot({ forceRefresh: true, signal: controller.signal })
       if (requestId === requestIdRef.current && !controller.signal.aborted) setState(stateFromSnapshot(snapshot))
     } catch (error) {
-      if (!isAbortError(error) && requestId === requestIdRef.current) {
-        setState((current) => ({ ...current, loading: false, refreshing: false, error: '赛事数据加载失败' }))
+      if (mountedRef.current && requestId === requestIdRef.current) {
+        setState((current) => ({ ...current, loading: false, refreshing: false, error: isAbortError(error) ? '赛事数据请求已取消，请稍后重试' : '赛事数据加载失败' }))
       }
     } finally {
       if (controllerRef.current === controller) controllerRef.current = null
@@ -77,7 +79,8 @@ export const useMatches = () => {
   }, [])
 
   useEffect(() => {
-    const controller = new AbortController()
+    mountedRef.current = true
+    const controller = createSafeAbortController()
     controllerRef.current = controller
     const requestId = ++requestIdRef.current
     const load = async () => {
@@ -91,8 +94,8 @@ export const useMatches = () => {
           if (requestId === requestIdRef.current && !controller.signal.aborted) setState(stateFromSnapshot(refreshed))
         }
       } catch (error) {
-        if (!isAbortError(error) && requestId === requestIdRef.current) {
-          setState((current) => ({ ...current, loading: false, backgroundRefreshing: false, error: '赛事数据加载失败' }))
+        if (mountedRef.current && requestId === requestIdRef.current) {
+          setState((current) => ({ ...current, loading: false, backgroundRefreshing: false, error: isAbortError(error) ? '赛事数据请求已取消，请稍后重试' : '赛事数据加载失败' }))
         }
       } finally {
         if (controllerRef.current === controller) controllerRef.current = null
@@ -100,6 +103,7 @@ export const useMatches = () => {
     }
     void load()
     return () => {
+      mountedRef.current = false
       controller.abort()
       controllerRef.current?.abort()
       controllerRef.current = null

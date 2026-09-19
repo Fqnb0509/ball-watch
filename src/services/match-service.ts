@@ -4,6 +4,7 @@ import type { Match, Sport } from '../types'
 import { dedupeMatches } from './match-identity'
 import { normalizeMatches } from './match-normalizer'
 import { isIsoTimestamp, validateMatchCollection } from './match-schema'
+import { createRecordFromEntries, createSafeAbortController, createSafeDateTimeFormatter, signalForFetch } from './runtime-compat'
 
 const CACHE_KEY = 'fieldwatch:matches-cache:v2'
 const CACHE_SCHEMA_VERSION = 2
@@ -99,7 +100,7 @@ type CircuitState = { consecutiveFailures: number; openUntil: number }
 
 type InFlightEntry = {
   promise: Promise<MatchSnapshot>
-  controller: AbortController
+  controller: ReturnType<typeof createSafeAbortController>
   subscribers: Set<symbol>
   keepAlive: boolean
   settled: boolean
@@ -307,12 +308,12 @@ const raceWithAbort = <T>(promise: Promise<T>, signal: AbortSignal): Promise<T> 
 
 const runProviderAttempt = async (provider: MatchProvider, request: MatchProviderRequest, outerSignal: AbortSignal): Promise<unknown> => {
   throwIfAborted(outerSignal)
-  const controller = new AbortController()
+  const controller = createSafeAbortController()
   const forwardAbort = () => controller.abort(outerSignal.reason)
   outerSignal.addEventListener('abort', forwardAbort, { once: true })
   const timer = setTimeout(() => controller.abort(new ProviderTimeoutError()), request.timeoutMs ?? DEFAULT_TIMEOUT_MS)
   try {
-    return await raceWithAbort(provider.fetch({ ...request, signal: controller.signal }), controller.signal)
+    return await raceWithAbort(provider.fetch({ ...request, signal: signalForFetch(controller.signal) }), controller.signal)
   } finally {
     clearTimeout(timer)
     outerSignal.removeEventListener('abort', forwardAbort)
@@ -614,7 +615,7 @@ const startRefresh = (query: NormalizedQuery, key: string, previous: CacheEnvelo
     return existing
   }
   if (existing) inFlight.delete(key)
-  const controller = new AbortController()
+  const controller = createSafeAbortController()
   let entry: InFlightEntry
   const promise = refreshQuery(query, key, previous, controller.signal).finally(() => {
     entry.settled = true
@@ -665,7 +666,7 @@ export const getMatches = async (options: MatchQuery = {}): Promise<Match[]> => 
 
 export const getMatchById = async (id: string) => (await getMatches()).find((match) => match.id === id)
 
-const beijingDateFormatter = new Intl.DateTimeFormat('en-US', {
+const beijingDateFormatter = createSafeDateTimeFormatter('en-US', {
   timeZone: 'Asia/Shanghai',
   year: 'numeric',
   month: '2-digit',
@@ -675,9 +676,9 @@ const beijingDateFormatter = new Intl.DateTimeFormat('en-US', {
 export const toBeijingDateKey = (value: Date | string): string | null => {
   const date = typeof value === 'string' ? new Date(value) : value
   if (!Number.isFinite(date.getTime())) return null
-  const parts = Object.fromEntries(beijingDateFormatter.formatToParts(date)
+  const parts = createRecordFromEntries(beijingDateFormatter.formatToParts(date)
     .filter((part) => part.type !== 'literal')
-    .map((part) => [part.type, part.value])) as Record<string, string>
+    .map((part) => [part.type, part.value] as const))
   return parts.year && parts.month && parts.day ? `${parts.year}-${parts.month}-${parts.day}` : null
 }
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { getStreamQueryResultForMatch } from '../services/stream-service'
 import type { StreamQueryResult } from '../services/stream-query-service'
 import { streamMatchIdentity } from '../services/match-stream-resolver'
+import { createSafeAbortController } from '../services/runtime-compat'
 import type { Match, Stream } from '../types'
 
 const EMPTY_STREAMS: Stream[] = []
@@ -10,15 +11,16 @@ export const useStreams = (match: Match | null) => {
   const key = match ? streamMatchIdentity(match) : ''
   const [state, setState] = useState<StreamState | null>(null)
   const matchRef = useRef(match)
-  const controllerRef = useRef<AbortController | null>(null)
+  const controllerRef = useRef<ReturnType<typeof createSafeAbortController> | null>(null)
   const requestIdRef = useRef(0)
+  const mountedRef = useRef(false)
 
   useEffect(() => { matchRef.current = match }, [match])
 
   const load = useCallback(async (forceRefresh: boolean) => {
     const currentMatch = matchRef.current
     if (!currentMatch || !key || controllerRef.current) return
-    const controller = new AbortController()
+    const controller = createSafeAbortController()
     controllerRef.current = controller
     const requestId = ++requestIdRef.current
     const startedAt = Date.now()
@@ -37,13 +39,13 @@ export const useStreams = (match: Match | null) => {
         result = await getStreamQueryResultForMatch(currentMatch, { forceRefresh: true, signal: controller.signal })
         if (current()) publish(result, false, false)
       }
-    } catch {
-      if (!current()) return
+    } catch (error) {
+      if (!mountedRef.current || requestId !== requestIdRef.current) return
       setState((previous) => ({
         data: previous?.key === key ? previous.data : [],
         providerResults: previous?.key === key ? previous.providerResults : [],
         fetchedAt: previous?.key === key ? previous.fetchedAt : new Date().toISOString(),
-        key, status: 'failure', error: '直播源查询失败，请稍后重试',
+        key, status: 'failure', error: error instanceof Error && error.name === 'AbortError' ? '直播源请求已取消，请稍后重试' : '直播源查询失败，请稍后重试',
         stale: previous?.key === key && previous.data.length > 0,
         fallbackActive: false, refreshing: false, cacheHit: false,
       }))
@@ -59,8 +61,10 @@ export const useStreams = (match: Match | null) => {
   }, [key, load])
 
   useEffect(() => {
+    mountedRef.current = true
     void load(false)
     return () => {
+      mountedRef.current = false
       requestIdRef.current += 1
       controllerRef.current?.abort()
       controllerRef.current = null

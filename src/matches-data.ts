@@ -1,10 +1,12 @@
 import type { Match, Sport } from './types'
+import { createRecordFromEntries, createSafeDateTimeFormatter } from './services/runtime-compat'
 
 const BEIJING_TIME_ZONE = 'Asia/Shanghai'
+const datePartsFormatter = createSafeDateTimeFormatter('en-US', { timeZone: BEIJING_TIME_ZONE, year: 'numeric', month: 'numeric', day: 'numeric' })
 
 const when = (offset: number, hour: number, minute = 0) => {
-  const parts = new Intl.DateTimeFormat('en-US', { timeZone: BEIJING_TIME_ZONE, year: 'numeric', month: 'numeric', day: 'numeric' }).formatToParts(new Date())
-  const value = Object.fromEntries(parts.filter((part) => part.type !== 'literal').map((part) => [part.type, Number(part.value)])) as Record<string, number>
+  const parts = datePartsFormatter.formatToParts(new Date())
+  const value = createRecordFromEntries(parts.filter((part) => part.type !== 'literal').map((part) => [part.type, Number(part.value)] as const))
   return new Date(Date.UTC(value.year, value.month - 1, value.day + offset, hour - 8, minute)).toISOString()
 }
 const team = (id: string, name: string, shortName: string, players: string[] = []) => ({ id, name, shortName, players })

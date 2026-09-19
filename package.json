@@ -10,6 +10,7 @@
     "test:stage3": "node scripts/verify-stage3.mjs",
     "test:stage4": "node scripts/verify-stage4.mjs",
     "test:stage5": "node scripts/verify-stage5.mjs",
+    "test:stage6": "node scripts/verify-stage6.mjs",
     "typecheck:functions": "tsc --noEmit -p tsconfig.functions.json",
     "preview": "vite preview"
   },

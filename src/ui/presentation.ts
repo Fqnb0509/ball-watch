@@ -1,17 +1,18 @@
 import type { Match, MatchStatus, Stream, StreamHealth, StreamSourceKind } from '../types'
 import type { StreamQueryStatus } from '../services/stream-query-service'
 import { getStreamUrlError } from '../services/stream-url-policy'
+import { createRecordFromEntries, createSafeDateTimeFormatter } from '../services/runtime-compat'
 
 export const SHANGHAI_TIME_ZONE = 'Asia/Shanghai'
-const dateFormatter = new Intl.DateTimeFormat('zh-CN', { timeZone: SHANGHAI_TIME_ZONE, year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' })
-const timeFormatter = new Intl.DateTimeFormat('zh-CN', { timeZone: SHANGHAI_TIME_ZONE, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
-const partsFormatter = new Intl.DateTimeFormat('en-US', { timeZone: SHANGHAI_TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' })
+const dateFormatter = createSafeDateTimeFormatter('zh-CN', { timeZone: SHANGHAI_TIME_ZONE, year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' })
+const timeFormatter = createSafeDateTimeFormatter('zh-CN', { timeZone: SHANGHAI_TIME_ZONE, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+const partsFormatter = createSafeDateTimeFormatter('en-US', { timeZone: SHANGHAI_TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' })
 const validDate = (value: Date | string) => Number.isFinite(new Date(value).getTime())
 export const formatTime = (value: string) => validDate(value) ? timeFormatter.format(new Date(value)) : '时间待定'
 export const formatDate = (value: string) => validDate(value) ? dateFormatter.format(new Date(value)) : '日期待定'
 export const dateKey = (value: Date | string): string => {
   if (!validDate(value)) return ''
-  const parts = Object.fromEntries(partsFormatter.formatToParts(new Date(value)).map((part) => [part.type, part.value]))
+  const parts = createRecordFromEntries(partsFormatter.formatToParts(new Date(value)).map((part) => [part.type, part.value] as const))
   return `${parts.year}-${parts.month}-${parts.day}`
 }
 export const addDays = (offset: number, now = new Date()): Date => {

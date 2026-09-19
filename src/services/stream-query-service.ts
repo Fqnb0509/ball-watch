@@ -4,6 +4,7 @@ import type { StreamProviderAdapter, StreamProviderQuery, StreamProviderQueryRes
 import type { Match, Stream } from '../types'
 import { getStreamUrlError } from './stream-url-policy'
 import { streamMatchIdentity } from './match-stream-resolver'
+import { createSafeAbortController, signalForFetch } from './runtime-compat'
 
 export type StreamQueryStatus = 'success' | 'success-empty' | 'partial-failure' | 'failure' | 'stale' | 'fallback-active'
 
@@ -188,7 +189,7 @@ export const createStreamQueryService = (options: StreamQueryServiceOptions = {}
     let lastError: unknown = null
     for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
       throwIfAborted(request.signal)
-      const controller = new AbortController()
+      const controller = createSafeAbortController()
       const forwardAbort = () => controller.abort(request.signal?.reason)
       request.signal?.addEventListener('abort', forwardAbort, { once: true })
       let timedOut = false
@@ -197,7 +198,7 @@ export const createStreamQueryService = (options: StreamQueryServiceOptions = {}
         controller.abort(new Error('Stream Provider request timed out'))
       }, timeoutMs)
       try {
-        const response = await raceWithAbort(queryStreamProvider(provider, { ...request, signal: controller.signal }), controller.signal)
+        const response = await raceWithAbort(queryStreamProvider(provider, { ...request, signal: signalForFetch(controller.signal) }), controller.signal)
         if (response.status === 'circuit-open') return response
         if (response.status === 'failure' || response.status === 'timeout') throw new ProviderAttemptError(response.error ?? 'Stream Provider query failed', response.status === 'timeout')
         circuits.delete(providerId)

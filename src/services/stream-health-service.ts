@@ -1,5 +1,6 @@
 import type { Stream, StreamHealth } from '../types'
 import { getStreamUrlError } from './stream-url-policy'
+import { createSafeAbortController, signalForFetch } from './runtime-compat'
 
 export type HealthResult = { streamId: string; status: StreamHealth; lastCheckedAt: string; latency: number | null; errorMessage: string | null }
 const DEFAULT_TIMEOUT_MS = 4000
@@ -14,12 +15,12 @@ export const checkStreamHealth = async (stream: Stream, timeoutMs = DEFAULT_TIME
   if (stream.access === 'official-page') return unknownResult(stream, '官方观看入口状态需由官方页面确认', startedAt)
   if (stream.type === 'embed') return unknownResult(stream, '嵌入源状态需由播放器确认', startedAt)
 
-  const controller = new AbortController()
+  const controller = createSafeAbortController()
   const onAbort = () => controller.abort()
   signal?.addEventListener('abort', onAbort, { once: true })
   const timeout = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    const response = await fetch(stream.url, { method: 'HEAD', mode: 'cors', signal: controller.signal })
+    const response = await fetch(stream.url, { method: 'HEAD', mode: 'cors', signal: signalForFetch(controller.signal) })
     const latency = Date.now() - startedAt
     return { streamId: stream.id, status: response.ok ? 'online' : 'offline', lastCheckedAt: new Date().toISOString(), latency, errorMessage: response.ok ? null : `HTTP ${response.status}` }
   } catch (error) {
