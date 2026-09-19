@@ -67,6 +67,51 @@ type MatchesFunctionDependencies = {
   cache: EdgeCache | null
 }
 
+type DiagnosticErrorCode =
+  | 'INVALID_QUERY'
+  | 'INVALID_DATE'
+  | 'INVALID_RANGE'
+  | 'CONFIG_INVALID'
+  | 'CACHE_FAILED'
+  | 'FETCH_FAILED'
+  | 'ABORTED'
+  | 'UPSTREAM_TIMEOUT'
+  | 'UPSTREAM_NON_2XX'
+  | 'INVALID_JSON'
+  | 'UPSTREAM_ERRORS'
+  | 'INVALID_RESPONSE_SCHEMA'
+  | 'RESPONSE_TOO_LARGE'
+
+type MatchDiagnostics = {
+  requestId: string
+  from: string | null
+  to: string | null
+  leagueId: string
+  season: string
+  keyPresent: boolean
+  cacheHit: boolean
+  upstreamStatus: number | null
+  upstreamOk: boolean | null
+  upstreamRequestDurationMs: number | null
+  timeout: boolean
+  abort: boolean
+  errorName: DiagnosticErrorCode | null
+  errorCode: DiagnosticErrorCode | null
+  invalidJson: boolean
+  upstreamErrorsPresent: boolean
+  responseIsArray: boolean | null
+  responseCount: number | null
+  validFixtureCount: number | null
+  bodyTooLarge: boolean
+  responseStatus: number | null
+}
+
+type UpstreamJsonResult = {
+  value: unknown | null
+  invalidJson: boolean
+  bodyTooLarge: boolean
+}
+
 type DateRangeResult =
   | { ok: true; value: MatchDateRange }
   | { ok: false; code: 'INVALID_QUERY' | 'INVALID_DATE' | 'INVALID_RANGE' }
@@ -94,6 +139,69 @@ const parseDateKey = (value: string): number | null => {
 
   if (!Number.isFinite(timestamp)) return null
   return formatUtcDateKey(new Date(timestamp)) === value ? timestamp : null
+}
+
+const createRequestId = (): string => {
+  try {
+    return globalThis.crypto.randomUUID()
+  } catch {
+    return `matches-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  }
+}
+
+const diagnosticConfigValue = (
+  value: string | undefined,
+  pattern: RegExp,
+  fallback: string,
+): string => {
+  if (value === undefined) return fallback
+  const normalized = value.trim()
+  return pattern.test(normalized) ? normalized : 'invalid'
+}
+
+const createDiagnostics = (env: ApiFootballEnv): MatchDiagnostics => ({
+  requestId: createRequestId(),
+  from: null,
+  to: null,
+  leagueId: diagnosticConfigValue(env.API_FOOTBALL_LEAGUE_ID, /^\d{1,10}$/, DEFAULT_LEAGUE_ID),
+  season: diagnosticConfigValue(env.API_FOOTBALL_SEASON, /^\d{4}$/, DEFAULT_SEASON),
+  keyPresent: typeof env.API_FOOTBALL_KEY === 'string' && env.API_FOOTBALL_KEY.trim().length > 0,
+  cacheHit: false,
+  upstreamStatus: null,
+  upstreamOk: null,
+  upstreamRequestDurationMs: null,
+  timeout: false,
+  abort: false,
+  errorName: null,
+  errorCode: null,
+  invalidJson: false,
+  upstreamErrorsPresent: false,
+  responseIsArray: null,
+  responseCount: null,
+  validFixtureCount: null,
+  bodyTooLarge: false,
+  responseStatus: null,
+})
+
+const logDiagnostics = (
+  level: 'log' | 'error',
+  event: string,
+  diagnostics: MatchDiagnostics,
+): void => {
+  const entry = { service: 'matches', event, ...diagnostics }
+  if (level === 'error') console.error(entry)
+  else console.log(entry)
+}
+
+const completeUpstreamDiagnostics = (
+  diagnostics: MatchDiagnostics,
+  controller: AbortController,
+  startedAt: number,
+  timedOut: boolean,
+): void => {
+  diagnostics.upstreamRequestDurationMs = Math.max(0, Date.now() - startedAt)
+  diagnostics.timeout = timedOut
+  diagnostics.abort = controller.signal.aborted
 }
 
 const addUtcDays = (dateKey: string, days: number): string => {
@@ -246,6 +354,26 @@ export const minimizeApiFootballResponse = (raw: unknown): MinimizedResponse => 
   return { ok: true, matches }
 }
 
+const inspectApiFootballResponse = (raw: unknown): Pick<
+  MatchDiagnostics,
+  'upstreamErrorsPresent' | 'responseIsArray' | 'responseCount' | 'validFixtureCount'
+> => {
+  const body = readRecord(raw)
+  const response = body?.response
+  const responseIsArray = Array.isArray(response)
+  const responseCount = responseIsArray ? response.length : null
+  const validFixtureCount = responseIsArray
+    ? response.filter((item) => minimizeFixture(item) !== null).length
+    : null
+
+  return {
+    upstreamErrorsPresent: hasUpstreamErrors(body?.errors),
+    responseIsArray,
+    responseCount,
+    validFixtureCount,
+  }
+}
+
 const resolveConfig = (env: ApiFootballEnv): ApiFootballConfig | null => {
   const key = typeof env.API_FOOTBALL_KEY === 'string' ? env.API_FOOTBALL_KEY.trim() : ''
   const leagueId = typeof env.API_FOOTBALL_LEAGUE_ID === 'string'
@@ -336,17 +464,21 @@ const defaultDependencies = (): MatchesFunctionDependencies => ({
   cache: runtimeCache(),
 })
 
-const readUpstreamJson = async (response: Response): Promise<unknown | null> => {
+const readUpstreamJson = async (response: Response): Promise<UpstreamJsonResult> => {
   const contentLength = Number(response.headers.get('Content-Length'))
-  if (Number.isFinite(contentLength) && contentLength > MAX_UPSTREAM_BODY_LENGTH) return null
+  if (Number.isFinite(contentLength) && contentLength > MAX_UPSTREAM_BODY_LENGTH) {
+    return { value: null, invalidJson: false, bodyTooLarge: true }
+  }
 
   const text = await response.text()
-  if (text.length > MAX_UPSTREAM_BODY_LENGTH) return null
+  if (text.length > MAX_UPSTREAM_BODY_LENGTH) {
+    return { value: null, invalidJson: false, bodyTooLarge: true }
+  }
 
   try {
-    return JSON.parse(text) as unknown
+    return { value: JSON.parse(text) as unknown, invalidJson: false, bodyTooLarge: false }
   } catch {
-    return null
+    return { value: null, invalidJson: true, bodyTooLarge: false }
   }
 }
 
@@ -354,20 +486,48 @@ export const handleMatchesRequest = async (
   context: PagesFunctionContext,
   dependencies: MatchesFunctionDependencies = defaultDependencies(),
 ): Promise<Response> => {
+  const diagnostics = createDiagnostics(context.env)
   const url = new URL(context.request.url)
   const dateRange = parseMatchDateRange(url.searchParams, dependencies.now())
-  if (!dateRange.ok) return errorResponse(400, dateRange.code)
+  if (!dateRange.ok) {
+    diagnostics.errorName = dateRange.code
+    diagnostics.errorCode = dateRange.code
+    diagnostics.responseStatus = 400
+    logDiagnostics('error', 'REQUEST_REJECTED', diagnostics)
+    return errorResponse(400, dateRange.code)
+  }
+
+  diagnostics.from = dateRange.value.from
+  diagnostics.to = dateRange.value.to
 
   const config = resolveConfig(context.env)
-  if (!config) return errorResponse(503, 'SERVICE_UNAVAILABLE')
+  if (!config) {
+    diagnostics.errorName = 'CONFIG_INVALID'
+    diagnostics.errorCode = 'CONFIG_INVALID'
+    diagnostics.responseStatus = 503
+    logDiagnostics('error', 'CONFIG_INVALID', diagnostics)
+    return errorResponse(503, 'SERVICE_UNAVAILABLE')
+  }
+
+  diagnostics.leagueId = config.leagueId
+  diagnostics.season = config.season
 
   const cacheKey = buildCacheKey(context.request.url, dateRange.value, config)
   if (dependencies.cache) {
     try {
       const cached = await dependencies.cache.match(cacheKey)
-      if (cached) return responseWithCacheStatus(cached, 'HIT')
+      if (cached) {
+        diagnostics.cacheHit = true
+        diagnostics.responseStatus = cached.status
+        logDiagnostics('log', 'CACHE_HIT', diagnostics)
+        return responseWithCacheStatus(cached, 'HIT')
+      }
     } catch {
-      // An unavailable edge cache must not make the data source unavailable.
+      diagnostics.errorName = 'CACHE_FAILED'
+      diagnostics.errorCode = 'CACHE_FAILED'
+      logDiagnostics('error', 'CACHE_READ_FAILED', diagnostics)
+      diagnostics.errorName = null
+      diagnostics.errorCode = null
     }
   }
 
@@ -384,6 +544,7 @@ export const handleMatchesRequest = async (
 
   let upstreamResponse: Response
   let raw: unknown | null
+  const upstreamStartedAt = Date.now()
   try {
     upstreamResponse = await dependencies.fetch(
       buildApiFootballFixturesUrl(dateRange.value, config.leagueId, config.season),
@@ -400,21 +561,53 @@ export const handleMatchesRequest = async (
       },
     )
 
+    diagnostics.upstreamStatus = upstreamResponse.status
+    diagnostics.upstreamOk = upstreamResponse.ok
+
     if (!upstreamResponse.ok) {
       const status = upstreamResponse.status === 429 ? 429 : upstreamResponse.status >= 500 ? 503 : 424
+      diagnostics.errorName = 'UPSTREAM_NON_2XX'
+      diagnostics.errorCode = 'UPSTREAM_NON_2XX'
+      diagnostics.responseStatus = status
+      completeUpstreamDiagnostics(diagnostics, controller, upstreamStartedAt, timedOut)
+      logDiagnostics('error', 'UPSTREAM_NON_2XX', diagnostics)
       return errorResponse(status, 'SERVICE_UNAVAILABLE')
     }
 
-    raw = await readUpstreamJson(upstreamResponse)
+    const upstreamJson = await readUpstreamJson(upstreamResponse)
+    diagnostics.invalidJson = upstreamJson.invalidJson
+    diagnostics.bodyTooLarge = upstreamJson.bodyTooLarge
+    raw = upstreamJson.value
   } catch {
+    const errorCode = timedOut ? 'UPSTREAM_TIMEOUT' : controller.signal.aborted ? 'ABORTED' : 'FETCH_FAILED'
+    diagnostics.errorName = errorCode === 'UPSTREAM_TIMEOUT' ? 'ABORTED' : errorCode
+    diagnostics.errorCode = errorCode
+    diagnostics.responseStatus = timedOut ? 504 : 502
+    completeUpstreamDiagnostics(diagnostics, controller, upstreamStartedAt, timedOut)
+    logDiagnostics('error', diagnostics.errorName, diagnostics)
     return errorResponse(timedOut ? 504 : 502, timedOut ? 'UPSTREAM_TIMEOUT' : 'SERVICE_UNAVAILABLE')
   } finally {
+    completeUpstreamDiagnostics(diagnostics, controller, upstreamStartedAt, timedOut)
     clearTimeout(timeoutId)
     context.request.signal.removeEventListener('abort', abortForClient)
   }
 
   const minimized = minimizeApiFootballResponse(raw)
-  if (!minimized.ok) return errorResponse(502, 'SERVICE_UNAVAILABLE')
+  Object.assign(diagnostics, inspectApiFootballResponse(raw))
+  if (!minimized.ok) {
+    const errorCode = diagnostics.bodyTooLarge
+      ? 'RESPONSE_TOO_LARGE'
+      : diagnostics.invalidJson
+        ? 'INVALID_JSON'
+        : diagnostics.upstreamErrorsPresent
+          ? 'UPSTREAM_ERRORS'
+          : 'INVALID_RESPONSE_SCHEMA'
+    diagnostics.errorName = errorCode
+    diagnostics.errorCode = errorCode
+    diagnostics.responseStatus = 502
+    logDiagnostics('error', errorCode, diagnostics)
+    return errorResponse(502, 'SERVICE_UNAVAILABLE')
+  }
 
   const fetchedAtDate = dependencies.now()
   const fetchedAt = fetchedAtDate.toISOString()
@@ -427,13 +620,22 @@ export const handleMatchesRequest = async (
     matches: minimized.matches,
   }
   const response = jsonResponse(payload, 200, true)
+  diagnostics.responseStatus = 200
 
   if (dependencies.cache) {
-    const cacheWrite = dependencies.cache.put(cacheKey, response.clone()).catch(() => undefined)
+    const cacheWrite = dependencies.cache.put(cacheKey, response.clone()).catch(() => {
+      logDiagnostics('error', 'CACHE_WRITE_FAILED', {
+        ...diagnostics,
+        errorName: 'CACHE_FAILED',
+        errorCode: 'CACHE_FAILED',
+      })
+      return undefined
+    })
     if (context.waitUntil) context.waitUntil(cacheWrite)
     else await cacheWrite
   }
 
+  logDiagnostics('log', 'UPSTREAM_OK', diagnostics)
   return responseWithCacheStatus(response, 'MISS')
 }
 
