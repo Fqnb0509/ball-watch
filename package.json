@@ -8,6 +8,7 @@
     "build": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.functions.json && vite build",
     "lint": "oxlint",
     "test:stage3": "node scripts/verify-stage3.mjs",
+    "test:stage4": "node scripts/verify-stage4.mjs",
     "typecheck:functions": "tsc --noEmit -p tsconfig.functions.json",
     "preview": "vite preview"
   },

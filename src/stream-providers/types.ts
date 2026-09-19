@@ -1,4 +1,21 @@
-import type { Match, Stream, StreamAccess, StreamProvider, StreamType } from '../types'
+import type { Match, Sport, Stream, StreamAccess, StreamProvider, StreamType } from '../types'
+
+export type StreamCandidateRole = 'primary' | 'fallback'
+
+export type StreamProviderResultStatus = 'success-empty' | 'success-with-candidates' | 'failure' | 'timeout' | 'circuit-open'
+
+export type StreamProviderQuery = {
+  match: Match
+  signal?: AbortSignal
+  timeoutMs?: number
+}
+
+export type StreamProviderQueryResult = {
+  provider: StreamProvider
+  status: StreamProviderResultStatus
+  streams: Stream[]
+  error: string | null
+}
 
 export type ConfiguredProvider = Exclude<StreamProvider, 'demo'>
 
@@ -6,9 +23,15 @@ export type AuthorizedStreamConfig = {
   id: string
   matchId?: string
   eventId?: string
+  sourceProvider?: string
+  providerEventId?: string
+  externalIds?: Record<string, string>
+  sport?: Sport
   league?: string
   homeTeamId?: string
   awayTeamId?: string
+  homeTeamName?: string
+  awayTeamName?: string
   startTime?: string
   provider: ConfiguredProvider
   name: string
@@ -20,25 +43,7 @@ export type AuthorizedStreamConfig = {
   enabled: boolean
   fallbackEnabled?: boolean
   access?: StreamAccess
-}
-
-const MATCH_TIME_WINDOW_MS = 30 * 60 * 1000
-
-export const matchesConfiguredEvent = (match: Match, config: AuthorizedStreamConfig): boolean => {
-  const hasExactIdentity = Boolean(config.matchId || config.eventId)
-  const hasCompositeIdentity = Boolean(config.league && config.homeTeamId && config.awayTeamId && config.startTime)
-  if (!hasExactIdentity && !hasCompositeIdentity) return false
-  if (config.matchId && config.matchId !== match.id) return false
-  if (config.eventId && config.eventId !== match.providerEventId) return false
-  if (config.league && config.league !== match.league) return false
-  if (config.homeTeamId && config.homeTeamId !== match.homeTeam.id) return false
-  if (config.awayTeamId && config.awayTeamId !== match.awayTeam.id) return false
-  if (config.startTime) {
-    const configuredTime = Date.parse(config.startTime)
-    const matchTime = Date.parse(match.startTime)
-    if (!Number.isFinite(configuredTime) || !Number.isFinite(matchTime) || Math.abs(configuredTime - matchTime) > MATCH_TIME_WINDOW_MS) return false
-  }
-  return true
+  role?: StreamCandidateRole
 }
 
 export const toAuthorizedStream = (config: AuthorizedStreamConfig, url = config.url ?? ''): Stream => ({
@@ -59,9 +64,11 @@ export const toAuthorizedStream = (config: AuthorizedStreamConfig, url = config.
   officialPageUrl: config.officialPageUrl ?? null,
   eventId: config.eventId ?? null,
   access: config.access ?? (config.officialPageUrl && !url ? 'official-page' : 'player'),
+  ...(config.role ? { role: config.role } : {}),
 })
 
 export type StreamProviderAdapter = {
   provider: ConfiguredProvider
-  getStreams: (match: Match) => Stream[]
+  getStreams?: (match: Match) => Stream[]
+  query?: (request: StreamProviderQuery) => Promise<StreamProviderQueryResult | readonly Stream[]> | StreamProviderQueryResult | readonly Stream[]
 }
