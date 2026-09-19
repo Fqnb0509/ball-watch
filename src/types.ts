@@ -6,6 +6,7 @@ export type StreamLegalStatus = 'demo' | 'authorized' | 'unverified'
 export type StreamAccess = 'player' | 'official-page'
 export type StreamHealth = 'online' | 'offline' | 'timeout' | 'unknown'
 export type StreamCandidateRole = 'primary' | 'fallback'
+export type StreamSourceKind = 'live' | 'vod' | 'unknown'
 export type Team = { id: string; name: string; shortName?: string; players?: string[] }
 export type Match = {
   id: string
@@ -56,4 +57,6 @@ export type Stream = {
   access: StreamAccess
   /** Assigned by the stream query layer; omitted by legacy providers. */
   role?: 'primary' | 'fallback'
+  /** Missing legacy metadata is treated as unknown and is never auto-played. */
+  sourceKind?: StreamSourceKind
 }

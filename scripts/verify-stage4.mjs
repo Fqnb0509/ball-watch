@@ -36,6 +36,7 @@ const stream = (overrides = {}) => ({
   officialPageUrl: null,
   eventId: null,
   access: 'player',
+  sourceKind: 'live',
   ...overrides,
 })
 
@@ -212,6 +213,8 @@ try {
     assert.equal(sources.length, 1)
     assert.equal(sources[0].url, 'https://www.youtube.com/embed/T4bVbVd03mM')
     assert.equal(sources[0].legalStatus, 'authorized')
+    assert.equal(sources[0].sourceKind, 'vod')
+    assert.equal(streamService.getPlayableSources(sources).length, 0)
   })
 
   test('a real API Match with no configured source does not receive a fabricated Stream', async () => {

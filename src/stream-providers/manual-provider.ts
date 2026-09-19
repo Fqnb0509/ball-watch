@@ -1,5 +1,6 @@
 import type { Match, Stream } from '../types'
-import { matchesConfiguredEvent, toAuthorizedStream, type AuthorizedStreamConfig } from './types'
+import { toAuthorizedStream, type AuthorizedStreamConfig } from './types'
+import { matchesConfiguredEvent } from '../services/match-stream-resolver'
 
 // Keep this list empty until every source has been manually checked and authorized.
 export const manualStreamConfigs: readonly AuthorizedStreamConfig[] = []

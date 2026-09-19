@@ -1,5 +1,6 @@
-import type { Match, Stream, StreamLegalStatus } from '../types'
-import { matchesConfiguredEvent, toAuthorizedStream, type AuthorizedStreamConfig } from './types'
+import type { Match, Stream, StreamLegalStatus, StreamSourceKind } from '../types'
+import { toAuthorizedStream, type AuthorizedStreamConfig } from './types'
+import { matchesConfiguredEvent } from '../services/match-stream-resolver'
 
 export type YouTubeStreamConfig = {
   id?: string
@@ -16,6 +17,7 @@ export type YouTubeStreamConfig = {
   homeTeamId?: string
   awayTeamId?: string
   startTime?: string
+  sourceKind?: StreamSourceKind
 }
 
 // Add a source only after the official channel, embeddability and rights are verified.
@@ -29,6 +31,7 @@ export const youtubeStreamConfigs: readonly YouTubeStreamConfig[] = [
     legalStatus: 'authorized',
     enabled: true,
     priority: 100,
+    sourceKind: 'vod',
   },
 ]
 
@@ -59,6 +62,7 @@ export const getYouTubeStreams = (match: Match): Stream[] => youtubeStreamConfig
       enabled: config.enabled,
       fallbackEnabled: config.fallbackEnabled ?? true,
       access: 'player',
+      sourceKind: config.sourceKind ?? 'unknown',
     }
     if (!matchesConfiguredEvent(match, stream)) return []
     return [toAuthorizedStream(stream, url)]

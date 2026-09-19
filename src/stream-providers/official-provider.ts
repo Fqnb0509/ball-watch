@@ -1,5 +1,6 @@
 import type { Match, Stream } from '../types'
-import { matchesConfiguredEvent, toAuthorizedStream, type AuthorizedStreamConfig } from './types'
+import { toAuthorizedStream, type AuthorizedStreamConfig } from './types'
+import { matchesConfiguredEvent } from '../services/match-stream-resolver'
 
 // Official pages are supported without extracting manifests or bypassing access controls.
 export const officialPageConfigs: readonly AuthorizedStreamConfig[] = []

@@ -136,11 +136,19 @@ const dedupeCandidates = (streams: readonly Stream[], matchId: string): Stream[]
   return [...result.values()]
 }
 
-const rankCandidates = (streams: readonly Stream[]): Stream[] => [...streams]
-  .sort((left, right) => right.priority - left.priority)
-  .map((stream, index) => ({ ...stream, role: index === 0 ? 'primary' : 'fallback' }))
+const rankCandidates = (streams: readonly Stream[]): Stream[] => {
+  let liveIndex = 0
+  return [...streams]
+    .sort((left, right) => right.priority - left.priority)
+    .map((stream) => {
+      if (stream.sourceKind !== 'live') return { ...stream, role: undefined }
+      const role = liveIndex === 0 ? 'primary' : 'fallback'
+      liveIndex += 1
+      return { ...stream, role }
+    })
+}
 
-const hasSafePlayableCandidate = (streams: readonly Stream[]): boolean => streams.some((stream) => stream.enabled && getStreamUrlError(stream) === null)
+const hasSafePlayableCandidate = (streams: readonly Stream[]): boolean => streams.some((stream) => stream.sourceKind === 'live' && stream.enabled && getStreamUrlError(stream) === null)
 
 const summarizeStatus = (
   providerResults: readonly StreamProviderQueryResult[],
@@ -230,7 +238,7 @@ export const createStreamQueryService = (options: StreamQueryServiceOptions = {}
     throwIfAborted(signal)
     const providerStreams = providerResults.flatMap((result) => result.streams)
     const candidates = rankCandidates(dedupeCandidates([...providerStreams, ...getDemoCandidates(match)], match.id))
-    const firstPlayable = candidates.find((stream) => stream.enabled && getStreamUrlError(stream) === null)
+    const firstPlayable = candidates.find((stream) => stream.sourceKind === 'live' && stream.enabled && getStreamUrlError(stream) === null)
     const fallbackActive = firstPlayable?.role === 'fallback'
     const summary = summarizeStatus(providerResults, candidates, fallbackActive)
     const value: StreamQueryResult = {

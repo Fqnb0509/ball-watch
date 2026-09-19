@@ -9,7 +9,7 @@ import { checkStreamHealth } from './services/stream-health-service'
 import { toBeijingDateKey } from './services/match-service'
 import { getNextSource, getPlayableSources, hasLegalSourceForMatch } from './services/stream-service'
 import { getSafeOfficialPageUrl, getStreamUrlError } from './services/stream-url-policy'
-import type { Match, MatchStatus, Sport, Stream, StreamHealth } from './types'
+import type { Match, MatchStatus, Sport, Stream, StreamHealth, StreamSourceKind } from './types'
 import './fieldwatch.css'
 
 type View = 'home' | 'favorites' | 'recent'
@@ -18,6 +18,8 @@ type HealthSnapshot = { status: StreamHealth; lastCheckedAt: string; latency: nu
 
 const statusLabels: Record<MatchStatus, string> = { live: '进行中', upcoming: '即将开始', finished: '已结束', cancelled: '已取消', postponed: '已延期', suspended: '已暂停' }
 const healthLabels: Record<StreamHealth, string> = { online: '在线', offline: '失效', timeout: '超时', unknown: '待检测' }
+const sourceKindLabels: Record<StreamSourceKind, string> = { live: '直播', vod: '录播', unknown: '未知' }
+const getSourceKind = (stream: Stream): StreamSourceKind => stream.sourceKind ?? 'unknown'
 const sportOrder: Array<Sport | 'all'> = ['all', 'football', 'basketball', 'baseball', 'tennis', 'esports']
 const BEIJING_TIME_ZONE = 'Asia/Shanghai'
 
@@ -108,6 +110,9 @@ function Watch(props: WatchProps) {
     ?? props.sources.find((item) => item.access === 'official-page' && getSafeOfficialPageUrl(item))
     ?? props.sources[0]
   const playableSources = getPlayableSources(props.sources)
+  const vodSources = props.sources.filter((item) => getSourceKind(item) === 'vod' && !getStreamUrlError(item))
+  const sourcePanelTitle = playableSources.length && vodSources.length ? '直播源与回放' : vodSources.length ? '回放来源' : '直播源'
+  const isVodSource = source?.sourceKind === 'vod'
   const allPlayableSourcesFailed = playableSources.length > 0 && playableSources.every((item) => failedIds.has(item.id))
   const status = source ? props.sourceHealth[source.id]?.status ?? source.status : 'unknown'
   const streamStatusMessage = props.streamsLoading
@@ -122,6 +127,8 @@ function Watch(props: WatchProps) {
             ? '部分 Provider 查询失败，但已有来源'
             : playableSources.length
               ? '已找到合法来源'
+              : vodSources.length
+                ? '比赛存在，当前提供录播回放'
               : '比赛存在，但暂无合法直播源'
   const accent = props.match.sport === 'basketball' ? '#ff8a4c' : props.match.sport === 'tennis' ? '#bfef63' : '#8b7bff'
   const style = { '--fw-accent': accent } as CSSProperties
@@ -164,17 +171,19 @@ function Watch(props: WatchProps) {
   const officialPageUrl = source?.access === 'official-page' ? getSafeOfficialPageUrl(source) : null
   let playerError: string | null = null
   if (props.streamsLoading) playerError = '正在检测直播源'
-  else if (props.streamsError && playableSources.length === 0) playerError = `直播查询失败：${props.streamsError}`
+  else if (props.streamsError && playableSources.length === 0 && !isVodSource) playerError = `直播查询失败：${props.streamsError}`
   else if (source?.access === 'official-page') playerError = officialPageUrl ? null : '暂无合法直播源'
-  else if (!source || playableSources.length === 0) playerError = '暂无合法直播源'
+  else if (!source) playerError = '暂无合法直播源'
+  else if (isVodSource) playerError = getStreamUrlError(source)
+  else if (playableSources.length === 0) playerError = '暂无合法直播源'
   else if (allPlayableSourcesFailed) playerError = '直播源不可用：所有合法直播源均已失败。'
   else if (source.access !== 'player') playerError = '暂无合法直播源'
   else if (props.streamsFallbackActive) playerError = '当前使用 fallback 直播源。'
   else if (props.streamsStatus === 'partial-failure') playerError = '已找到合法来源，但部分 Provider 查询失败。'
   else playerError = getStreamUrlError(source) ?? (status === 'offline' || status === 'timeout' ? '直播源不可用，请切换备用源。' : null)
   const retrySources = () => { healthRequestRef.current += 1; failedIdsRef.current = new Set(); setFailedState({ matchId: props.match.id, ids: new Set() }); props.setMessage(null); props.onRefreshSources() }
-  const playerNote = officialPageUrl ? '该来源仅提供官方观看入口，本站不会提取或绕过受保护的直播流。' : playerError ?? streamStatusMessage
-  return <section className="fw-watch" style={style}><button className="fw-back" onClick={props.back}>← 返回赛事中心</button><div className="fw-watch-head"><div><p className="fw-eyebrow muted">{props.match.league} · {props.match.round}</p><h1>{props.match.homeTeam.name} <span>vs</span> {props.match.awayTeam.name}</h1><p className="fw-watch-sub"><i className={props.match.status === 'live' ? 'live' : ''} />{statusLabels[props.match.status]} · {formatDate(props.match.startTime)} {formatTime(props.match.startTime)} · {props.match.venue}</p><div className="fw-watch-favorites"><button className={props.favorite ? 'active' : ''} onClick={props.onFavorite}>{props.favorite ? '★ 已收藏比赛' : '☆ 收藏比赛'}</button><button className={props.isTeamFavorite(props.match.homeTeam.id) ? 'active' : ''} onClick={() => props.onTeamFavorite(props.match.homeTeam.id)}>收藏 {props.match.homeTeam.name}</button><button className={props.isLeagueFavorite ? 'active' : ''} onClick={props.onLeagueFavorite}>收藏 {props.match.league}</button></div></div></div><div className="fw-player-layout"><div><div className="fw-player" ref={playerRef}><div className="fw-player-label"><span>{props.match.league}</span><span>FIELDWATCH PLAYER</span></div>{officialPageUrl ? <div className="fw-player-center"><div className="fw-play-ring">↗</div><strong>官方观看入口</strong><p>该来源由官方页面提供，播放权限和地区可用性以官方页面为准。</p><a className="fw-official-link" href={officialPageUrl} target="_blank" rel="noopener noreferrer">打开官方观看入口</a></div> : source && source.access === 'player' && !playerError && source.url ? <MediaElement key={`${source.id}:${source.url}`} source={source} onError={onMediaError} /> : <div className="fw-player-center"><div className="fw-play-ring">{playerError ? '!' : '▶'}</div><strong>{playerError ?? '播放器已就绪'}</strong><p>{source ? `当前源：${source.name} · ${source.type.toUpperCase()}` : '请选择一个直播源。'}</p></div>}<div className="fw-controls"><button onClick={fullscreen} title="全屏播放器">⛶</button><i><b /></i><button onClick={refresh} title="检查当前直播源">↻</button></div></div><div className={playerError ? 'fw-player-note error' : 'fw-player-note'}><span>{playerError ? '!' : '✓'}</span>{props.message ?? playerNote}<button onClick={() => props.setMessage(null)}>清除提示</button></div></div><aside className="fw-source-panel"><div className="fw-panel-head"><div><p className="fw-eyebrow muted">STREAM SOURCES</p><h3>直播源</h3></div><small>{props.sources.length} 个</small></div><p className="fw-source-state">{streamStatusMessage}</p>{props.streamsLoading ? <p className="fw-no-source">正在查询直播源…</p> : props.streamsError && props.sources.length === 0 ? <p className="fw-no-source">{props.streamsError}</p> : <div className="fw-source-list">{props.sources.length ? props.sources.map((item) => { const itemStatus = props.sourceHealth[item.id]?.status ?? item.status; const accessLabel = item.access === 'official-page' ? '官方入口' : item.provider === 'demo' ? 'DEMO · 待授权' : item.type.toUpperCase(); return <button key={item.id} className={item.id === source?.id ? 'selected' : ''} disabled={!item.enabled || failedIds.has(item.id)} onClick={() => { props.onSelectSource(item.id); props.setMessage(null) }}><i /><span><b>{item.name}</b><small>{accessLabel} · 优先级 {item.priority}{item.enabled ? '' : ' · 已禁用'}</small></span><em className={itemStatus === 'online' ? 'ready' : itemStatus === 'offline' || itemStatus === 'timeout' ? 'down' : ''}>{item.legalStatus === 'authorized' ? healthLabels[itemStatus] : '待授权'}</em></button> }) : <p className="fw-no-source">暂无合法直播源。</p>}</div>}<div className="fw-tip"><i>i</i>仅自动尝试已授权且通过 URL 校验的备用源；Demo 源不会伪装成真实直播。</div><button className="fw-source-refresh" onClick={retrySources}>刷新直播源</button></aside></div></section>
+  const playerNote = officialPageUrl ? '该来源仅提供官方观看入口，本站不会提取或绕过受保护的直播流。' : isVodSource ? '当前为录播回放，不是实时直播。' : playerError ?? streamStatusMessage
+  return <section className="fw-watch" style={style}><button className="fw-back" onClick={props.back}>← 返回赛事中心</button><div className="fw-watch-head"><div><p className="fw-eyebrow muted">{props.match.league} · {props.match.round}</p><h1>{props.match.homeTeam.name} <span>vs</span> {props.match.awayTeam.name}</h1><p className="fw-watch-sub"><i className={props.match.status === 'live' ? 'live' : ''} />{statusLabels[props.match.status]} · {formatDate(props.match.startTime)} {formatTime(props.match.startTime)} · {props.match.venue}</p><div className="fw-watch-favorites"><button className={props.favorite ? 'active' : ''} onClick={props.onFavorite}>{props.favorite ? '★ 已收藏比赛' : '☆ 收藏比赛'}</button><button className={props.isTeamFavorite(props.match.homeTeam.id) ? 'active' : ''} onClick={() => props.onTeamFavorite(props.match.homeTeam.id)}>收藏 {props.match.homeTeam.name}</button><button className={props.isLeagueFavorite ? 'active' : ''} onClick={props.onLeagueFavorite}>收藏 {props.match.league}</button></div></div></div><div className="fw-player-layout"><div><div className="fw-player" ref={playerRef}><div className="fw-player-label"><span>{props.match.league}</span><span>FIELDWATCH PLAYER</span></div>{officialPageUrl ? <div className="fw-player-center"><div className="fw-play-ring">↗</div><strong>官方观看入口</strong><p>该来源由官方页面提供，播放权限和地区可用性以官方页面为准。</p><a className="fw-official-link" href={officialPageUrl} target="_blank" rel="noopener noreferrer">打开官方观看入口</a></div> : source && source.access === 'player' && !playerError && source.url ? <MediaElement key={`${source.id}:${source.url}`} source={source} onError={onMediaError} /> : <div className="fw-player-center"><div className="fw-play-ring">{playerError ? '!' : '▶'}</div><strong>{playerError ?? '播放器已就绪'}</strong><p>{source ? `当前源：${source.name} · ${source.type.toUpperCase()}` : '请选择一个直播源。'}</p></div>}<div className="fw-controls"><button onClick={fullscreen} title="全屏播放器">⛶</button><i><b /></i><button onClick={refresh} title="检查当前直播源">↻</button></div></div><div className={playerError ? 'fw-player-note error' : 'fw-player-note'}><span>{playerError ? '!' : '✓'}</span>{props.message ?? playerNote}<button onClick={() => props.setMessage(null)}>清除提示</button></div></div><aside className="fw-source-panel"><div className="fw-panel-head"><div><p className="fw-eyebrow muted">STREAM SOURCES</p><h3>{sourcePanelTitle}</h3></div><small>{props.sources.length} 个</small></div><p className="fw-source-state">{streamStatusMessage}</p>{props.streamsLoading ? <p className="fw-no-source">正在查询直播源…</p> : props.streamsError && props.sources.length === 0 ? <p className="fw-no-source">{props.streamsError}</p> : <div className="fw-source-list">{props.sources.length ? props.sources.map((item) => { const itemStatus = props.sourceHealth[item.id]?.status ?? item.status; const sourceKindLabel = sourceKindLabels[getSourceKind(item)]; const accessLabel = item.access === 'official-page' ? '官方入口' : item.provider === 'demo' ? 'DEMO · 待授权' : item.type.toUpperCase(); return <button key={item.id} className={item.id === source?.id ? 'selected' : ''} disabled={!item.enabled || failedIds.has(item.id)} onClick={() => { props.onSelectSource(item.id); props.setMessage(null) }}><i /><span><b>{item.name}</b><small>{sourceKindLabel} · {accessLabel} · 优先级 {item.priority}{item.enabled ? '' : ' · 已禁用'}</small></span><em className={itemStatus === 'online' ? 'ready' : itemStatus === 'offline' || itemStatus === 'timeout' ? 'down' : ''}>{item.legalStatus === 'authorized' ? healthLabels[itemStatus] : '待授权'}</em></button> }) : <p className="fw-no-source">暂无合法直播源。</p>}</div>}<div className="fw-tip"><i>i</i>仅自动尝试已授权且通过 URL 校验的备用源；Demo 源不会伪装成真实直播。</div><button className="fw-source-refresh" onClick={retrySources}>刷新直播源</button></aside></div></section>
 }
 function MediaElement({ source, onError }: { source: Stream; onError: (event: SyntheticEvent<HTMLVideoElement | HTMLIFrameElement>) => void }) { if (source.type === 'embed') return <EmbedElement source={source} onError={onError} />; return <VideoElement source={source} onError={onError} /> }
 function VideoElement({ source, onError }: { source: Stream; onError: (event: SyntheticEvent<HTMLVideoElement>) => void }) {

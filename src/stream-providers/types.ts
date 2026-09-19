@@ -1,4 +1,4 @@
-import type { Match, Sport, Stream, StreamAccess, StreamProvider, StreamType } from '../types'
+import type { Match, Sport, Stream, StreamAccess, StreamProvider, StreamSourceKind, StreamType } from '../types'
 
 // Compatibility export for legacy providers; the resolver remains the single implementation.
 export { matchesConfiguredEvent } from '../services/match-stream-resolver'
@@ -47,6 +47,7 @@ export type AuthorizedStreamConfig = {
   fallbackEnabled?: boolean
   access?: StreamAccess
   role?: StreamCandidateRole
+  sourceKind?: StreamSourceKind
 }
 
 export const toAuthorizedStream = (config: AuthorizedStreamConfig, url = config.url ?? ''): Stream => ({
@@ -68,6 +69,7 @@ export const toAuthorizedStream = (config: AuthorizedStreamConfig, url = config.
   eventId: config.eventId ?? null,
   access: config.access ?? (config.officialPageUrl && !url ? 'official-page' : 'player'),
   ...(config.role ? { role: config.role } : {}),
+  sourceKind: config.sourceKind ?? 'unknown',
 })
 
 export type StreamProviderAdapter = {

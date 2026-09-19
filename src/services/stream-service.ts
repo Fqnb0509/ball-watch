@@ -48,9 +48,9 @@ export const getEnabledStreamsForMatch = async (match: string | Match): Promise<
 
 export const sortSourcesByPriority = (sources: Stream[]) => [...sources].filter((source) => source.enabled).sort((left, right) => right.priority - left.priority)
 
-export const getPlayableSources = (sources: Stream[]) => sortSourcesByPriority(sources).filter((source) => source.access === 'player' && source.legalStatus === 'authorized' && !getStreamUrlError(source))
+export const getPlayableSources = (sources: Stream[]) => sortSourcesByPriority(sources).filter((source) => source.sourceKind === 'live' && source.access === 'player' && source.legalStatus === 'authorized' && !getStreamUrlError(source))
 
-export const hasLegalSourceForMatch = (match: Match) => [...demoStreams.filter((stream) => stream.matchId === match.id), ...getConfiguredStreamsForMatch(match)].some((source) => !getStreamUrlError(source))
+export const hasLegalSourceForMatch = (match: Match) => [...demoStreams.filter((stream) => stream.matchId === match.id), ...getConfiguredStreamsForMatch(match)].some((source) => source.sourceKind === 'live' && !getStreamUrlError(source))
 
 export const getNextSource = (sources: Stream[], failedIds: ReadonlySet<string>) => {
   const failed = sources.find((source) => failedIds.has(source.id))
