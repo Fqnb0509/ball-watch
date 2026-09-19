@@ -76,7 +76,7 @@ export const isFootballDataMatchDto = (value: unknown): value is FootballDataMat
   return isPositiveInteger(value.id)
     && isIsoTimestamp(value.utcDate)
     && typeof value.status === 'string'
-    && Object.hasOwn(STATUS_MAP, value.status)
+    && Object.prototype.hasOwnProperty.call(STATUS_MAP, value.status)
     && isRecord(competition)
     && hasOnlyKeys(competition, ['name'])
     && isNonEmptyString(competition.name)

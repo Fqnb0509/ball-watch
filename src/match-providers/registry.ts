@@ -1,6 +1,7 @@
 import type { Sport } from '../types'
 import { apiFootballMatchProvider } from './api-football-provider'
 import { demoMatchProvider } from './demo-provider'
+import { footballDataMatchProvider } from './football-data-provider'
 import type { MatchProvider } from './types'
 
 const providers = new Map<string, MatchProvider>()
@@ -18,5 +19,6 @@ export const getMatchProvidersForSport = (sport: Sport): MatchProvider[] => Arra
 
 export const listMatchProviders = (): MatchProvider[] => Array.from(providers.values())
 
+registerMatchProvider(footballDataMatchProvider)
 registerMatchProvider(apiFootballMatchProvider)
 registerMatchProvider(demoMatchProvider)

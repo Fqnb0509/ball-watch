@@ -89,7 +89,7 @@ const hasOnlyKeys = (value: Record<string, unknown>, expected: readonly string[]
 const isStatus = (value: unknown): value is { short: ApiFootballStatusCode } => isRecord(value)
   && hasOnlyKeys(value, ['short'])
   && typeof value.short === 'string'
-  && Object.hasOwn(STATUS_MAP, value.short)
+  && Object.prototype.hasOwnProperty.call(STATUS_MAP, value.short)
 
 const isVenue = (value: unknown): value is { name: string | null } => isRecord(value)
   && hasOnlyKeys(value, ['name'])

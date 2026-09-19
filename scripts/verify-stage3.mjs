@@ -90,6 +90,7 @@ try {
   const providerModule = await vite.ssrLoadModule('/src/match-providers/api-football-provider.ts')
   const footballDataSchema = await vite.ssrLoadModule('/src/match-providers/football-data-schema.ts')
   const footballDataProvider = await vite.ssrLoadModule('/src/match-providers/football-data-provider.ts')
+  const registry = await vite.ssrLoadModule('/src/match-providers/registry.ts')
   const identityModule = await vite.ssrLoadModule('/src/services/match-identity.ts')
   const matchService = await vite.ssrLoadModule('/src/services/match-service.ts')
   const youtubeModule = await vite.ssrLoadModule('/src/stream-providers/youtube-provider.ts')
@@ -303,6 +304,42 @@ try {
     }
   })
 
+  test('Match Provider Registry keeps football-data first, API-Football second and Demo last', () => {
+    const providers = registry.listMatchProviders()
+    assert.deepEqual(providers.map((provider) => provider.id), ['football-data', 'api-football', 'demo'])
+    assert.deepEqual(providers.map((provider) => provider.priority), [10, 20, 1000])
+  })
+
+  test('football-data success uses the real Match and does not request API-Football', async () => {
+    const requested = []
+    globalThis.fetch = async (input) => {
+      requested.push(String(input))
+      return jsonResponse(footballDataEnvelope([footballDataMatch()]))
+    }
+    const snapshot = await matchService.getMatchSnapshot({
+      sport: 'football',
+      from: '2026-09-19T00:00:00.000Z',
+      to: '2026-09-21T23:59:59.000Z',
+      forceRefresh: true,
+    })
+    assert.equal(requested.length, 1)
+    assert.equal(requested[0].includes('provider=football-data'), true)
+    assert.equal(requested[0].includes('provider=api-football'), false)
+    assert.equal(snapshot.metadata.fallback, false)
+    assert.equal(snapshot.data[0].id, 'football-data-987654')
+  })
+
+  test('Schemas remain valid when Object.hasOwn is unavailable', () => {
+    const originalHasOwn = Object.hasOwn
+    try {
+      Object.hasOwn = undefined
+      assert.equal(providerModule.apiFootballMatchProvider.normalize(envelope([fixture()])).matches.length, 1)
+      assert.equal(footballDataProvider.footballDataMatchProvider.normalize(footballDataEnvelope([footballDataMatch()])).matches.length, 1)
+    } finally {
+      Object.hasOwn = originalHasOwn
+    }
+  })
+
   test('Browser provider requests only the same-origin Function path', async () => {
     let requested = ''
     let init
@@ -324,12 +361,12 @@ try {
     globalThis.fetch = async (input) => {
       calls += 1
       if (String(input).includes('provider=football-data')) return new Response(null, { status: 503 })
-      return jsonResponse(envelope([fixture()]))
+      return jsonResponse(envelope([fixture({ fixture: { ...fixture().fixture, date: '2026-09-23T12:30:00+08:00' } })]))
     }
     const snapshot = await matchService.getMatchSnapshot({
       sport: 'football',
-      from: '2026-09-19T00:00:00.000Z',
-      to: '2026-09-21T23:59:59.000Z',
+      from: '2026-09-22T00:00:00.000Z',
+      to: '2026-09-24T23:59:59.000Z',
       forceRefresh: true,
     })
     assert.equal(calls, 4)
