@@ -36,6 +36,7 @@ export type MatchProviderResult = {
 
 export type MatchProvider = {
   readonly id: string
+  readonly priority?: number
   readonly supportedSports: readonly Sport[]
   readonly metadata: ProviderMetadata
   fetch: (request?: MatchProviderRequest) => Promise<unknown>
