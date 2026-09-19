@@ -110,6 +110,8 @@ type MatchDiagnostics = {
   causeCode: string | null
   invalidJson: boolean
   upstreamErrorsPresent: boolean
+  upstreamErrorKeys: string[]
+  upstreamErrorMessages: string[]
   responseIsArray: boolean | null
   responseCount: number | null
   validFixtureCount: number | null
@@ -194,7 +196,7 @@ const redactDiagnosticText = (value: string, secret: string): string | null => {
   if (secret) sanitized = sanitized.split(secret).join('[redacted]')
   sanitized = sanitized
     .replace(/https?:\/\/[^\s"'<>]+/gi, '[redacted-url]')
-    .replace(/(?:x-apisports-key|authorization|cookie|set-cookie)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^,;}]+)/gi, '[redacted-header]')
+    .replace(/(?:x-apisports-key|authorization|cookie|set-cookie|api[-_]?key|token|password|secret)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^,;}]+)/gi, '[redacted-field]')
     .replace(/[?&](?:api[-_]?key|key|token|secret|signature|authorization)=[^&\s]+/gi, '[redacted-query]')
   sanitized = replaceAsciiControlCharacters(sanitized).slice(0, MAX_SAFE_ERROR_TEXT_LENGTH)
   return sanitized || null
@@ -267,6 +269,8 @@ const createDiagnostics = (env: ApiFootballEnv): MatchDiagnostics => {
     causeCode: null,
     invalidJson: false,
     upstreamErrorsPresent: false,
+    upstreamErrorKeys: [],
+    upstreamErrorMessages: [],
     responseIsArray: null,
     responseCount: null,
     validFixtureCount: null,
@@ -364,6 +368,64 @@ const hasUpstreamErrors = (value: unknown): boolean => {
   return record ? Object.keys(record).length > 0 : value !== null && value !== undefined
 }
 
+const MAX_UPSTREAM_ERROR_ITEMS = 20
+const SENSITIVE_UPSTREAM_ERROR_KEY_PATTERN = /(?:api[-_]?key|token|password|authorization|secret|cookie)/i
+
+const upstreamErrorTypeMarker = (value: unknown): string => {
+  if (value === null) return '[null]'
+  if (Array.isArray(value)) return '[array]'
+  switch (typeof value) {
+    case 'boolean': return '[boolean]'
+    case 'function': return '[function]'
+    case 'number': return '[number]'
+    case 'object': return '[object]'
+    case 'string': return '[string]'
+    case 'symbol': return '[symbol]'
+    case 'undefined': return '[undefined]'
+    default: return '[unknown]'
+  }
+}
+
+const safeUpstreamErrorKey = (key: string, secret: string): string => {
+  const sanitized = redactDiagnosticText(key, secret)
+  if (!sanitized) return '[empty-key]'
+  return SENSITIVE_UPSTREAM_ERROR_KEY_PATTERN.test(sanitized) ? '[sensitive-key]' : sanitized
+}
+
+const safeUpstreamErrorMessage = (value: unknown, secret: string): string => {
+  if (typeof value !== 'string') return upstreamErrorTypeMarker(value)
+  return redactDiagnosticText(value, secret) ?? '[empty-string]'
+}
+
+const summarizeUpstreamErrors = (
+  value: unknown,
+  secret: string,
+): Pick<MatchDiagnostics, 'upstreamErrorKeys' | 'upstreamErrorMessages'> => {
+  const record = readRecord(value)
+  if (record) {
+    const entries = Object.entries(record).slice(0, MAX_UPSTREAM_ERROR_ITEMS)
+    return {
+      upstreamErrorKeys: entries.map(([key]) => safeUpstreamErrorKey(key, secret)),
+      upstreamErrorMessages: entries.map(([, message]) => safeUpstreamErrorMessage(message, secret)),
+    }
+  }
+
+  if (Array.isArray(value)) {
+    return {
+      upstreamErrorKeys: [],
+      upstreamErrorMessages: value
+        .slice(0, MAX_UPSTREAM_ERROR_ITEMS)
+        .map((message) => safeUpstreamErrorMessage(message, secret)),
+    }
+  }
+
+  if (value !== null && value !== undefined) {
+    return { upstreamErrorKeys: [], upstreamErrorMessages: [safeUpstreamErrorMessage(value, secret)] }
+  }
+
+  return { upstreamErrorKeys: [], upstreamErrorMessages: [] }
+}
+
 const minimizeFixture = (value: unknown): ApiFootballFixtureDto | null => {
   const item = readRecord(value)
   const fixture = readRecord(item?.fixture)
@@ -446,9 +508,14 @@ export const minimizeApiFootballResponse = (raw: unknown): MinimizedResponse => 
   return { ok: true, matches }
 }
 
-const inspectApiFootballResponse = (raw: unknown): Pick<
+const inspectApiFootballResponse = (raw: unknown, secret: string): Pick<
   MatchDiagnostics,
-  'upstreamErrorsPresent' | 'responseIsArray' | 'responseCount' | 'validFixtureCount'
+  | 'upstreamErrorsPresent'
+  | 'upstreamErrorKeys'
+  | 'upstreamErrorMessages'
+  | 'responseIsArray'
+  | 'responseCount'
+  | 'validFixtureCount'
 > => {
   const body = readRecord(raw)
   const response = body?.response
@@ -457,9 +524,11 @@ const inspectApiFootballResponse = (raw: unknown): Pick<
   const validFixtureCount = responseIsArray
     ? response.filter((item) => minimizeFixture(item) !== null).length
     : null
+  const errorSummary = summarizeUpstreamErrors(body?.errors, secret)
 
   return {
     upstreamErrorsPresent: hasUpstreamErrors(body?.errors),
+    ...errorSummary,
     responseIsArray,
     responseCount,
     validFixtureCount,
@@ -713,7 +782,7 @@ export const handleMatchesRequest = async (
   }
 
   const minimized = minimizeApiFootballResponse(raw)
-  Object.assign(diagnostics, inspectApiFootballResponse(raw))
+  Object.assign(diagnostics, inspectApiFootballResponse(raw, config.key))
   if (!minimized.ok) {
     const errorCode = diagnostics.bodyTooLarge
       ? 'RESPONSE_TOO_LARGE'
