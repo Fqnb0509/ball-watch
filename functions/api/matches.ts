@@ -77,6 +77,7 @@ type DiagnosticErrorCode =
   | 'FETCH_FAILED'
   | 'ABORTED'
   | 'UPSTREAM_TIMEOUT'
+  | 'UPSTREAM_REDIRECT'
   | 'UPSTREAM_NON_2XX'
   | 'INVALID_JSON'
   | 'UPSTREAM_ERRORS'
@@ -662,7 +663,7 @@ export const handleMatchesRequest = async (
           'x-apisports-key': config.key,
         },
         credentials: 'omit',
-        redirect: 'error',
+        redirect: 'manual',
         referrerPolicy: 'no-referrer',
         signal: controller.signal,
       },
@@ -670,6 +671,15 @@ export const handleMatchesRequest = async (
 
     diagnostics.upstreamStatus = upstreamResponse.status
     diagnostics.upstreamOk = upstreamResponse.ok
+
+    if (upstreamResponse.status >= 300 && upstreamResponse.status < 400) {
+      diagnostics.errorName = 'UPSTREAM_REDIRECT'
+      diagnostics.errorCode = 'UPSTREAM_REDIRECT'
+      diagnostics.responseStatus = 502
+      completeUpstreamDiagnostics(diagnostics, controller, upstreamStartedAt, timedOut)
+      logDiagnostics('error', 'UPSTREAM_REDIRECT', diagnostics)
+      return errorResponse(502, 'SERVICE_UNAVAILABLE')
+    }
 
     if (!upstreamResponse.ok) {
       const status = upstreamResponse.status === 429 ? 429 : upstreamResponse.status >= 500 ? 503 : 424

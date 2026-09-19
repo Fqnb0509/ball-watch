@@ -116,10 +116,46 @@ try {
     assert.equal(`${upstream.origin}${upstream.pathname}`, 'https://v3.football.api-sports.io/fixtures')
     assert.deepEqual([...upstream.searchParams.keys()].sort(), ['from', 'league', 'season', 'timezone', 'to'])
     assert.equal(new Headers(requestInit.headers).get('x-apisports-key'), fakeSecret)
-    assert.equal(requestInit.redirect, 'error')
+    assert.equal(requestInit.redirect, 'manual')
     const publicBody = await response.text()
     assert.equal(publicBody.includes(fakeSecret), false)
     assert.equal(publicBody.includes('x-apisports-key'), false)
+  })
+
+  test('Function blocks upstream redirects without forwarding upstream data', async () => {
+    let calls = 0
+    let requestInit
+    const redirectLocation = 'https://redirect.example/private?marker=location'
+    const upstreamBody = 'upstream-response-body-marker'
+    const upstreamHeader = 'upstream-header-marker'
+    const response = await functionModule.handleMatchesRequest({
+      request: new Request('https://fieldwatch.example/api/matches?from=2026-09-19&to=2026-09-20'),
+      env: { API_FOOTBALL_KEY: 'test-only-not-a-real-key' },
+    }, {
+      now: () => fixedNow,
+      cache: null,
+      fetch: async (_url, init) => {
+        calls += 1
+        requestInit = init
+        return new Response(upstreamBody, {
+          status: 302,
+          headers: {
+            Location: redirectLocation,
+            'X-Upstream-Only': upstreamHeader,
+          },
+        })
+      },
+    })
+
+    assert.equal(requestInit.redirect, 'manual')
+    assert.equal(calls, 1)
+    assert.equal(response.status, 502)
+    assert.equal(response.headers.get('Location'), null)
+    assert.equal(response.headers.get('X-Upstream-Only'), null)
+    const publicBody = await response.text()
+    assert.equal(publicBody.includes(redirectLocation), false)
+    assert.equal(publicBody.includes(upstreamBody), false)
+    assert.equal(publicBody.includes(upstreamHeader), false)
   })
 
   test('Function rejects arbitrary query passthrough before upstream access', async () => {
